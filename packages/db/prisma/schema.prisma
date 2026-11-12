@@ -1,0 +1,303 @@
+// Database schema.
+//
+// What this file cannot express lives in hand-written SQL migrations:
+// row-level security policies, role grants, security-definer functions, check
+// constraints and the partial unique index on incidents. See
+// prisma/migrations/*_tenant_isolation.
+//
+// Conventions
+// - Every table except `tenants` carries `tenant_id` and is protected by a
+//   row-level security policy keyed on it.
+// - Every parent that is referenced by a child exposes UNIQUE (tenant_id, id),
+//   and children reference that pair. Foreign-key checks bypass row-level
+//   security, so a plain FK on `id` would let a row point at another tenant's
+//   parent; the composite key makes that impossible.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Vendor {
+  datto_bcdr
+  kaseya_uniview
+  veeam_vspc
+  mock
+
+  @@map("vendor")
+}
+
+/// Normalized backup status. `missed` is derived by the missed-backup rule and
+/// is only ever an asset's current status, never a stored vendor result.
+enum BackupStatus {
+  success
+  warning
+  failed
+  missed
+  running
+  unknown
+
+  @@map("backup_status")
+}
+
+enum SyncStatus {
+  never
+  running
+  ok
+  error
+
+  @@map("sync_status")
+}
+
+enum IncidentType {
+  failed
+  missed
+  /// Reserved for the SLA rule; not raised in Phase 1.
+  stale
+
+  @@map("incident_type")
+}
+
+enum UserRole {
+  owner
+  technician
+
+  @@map("user_role")
+}
+
+enum ActorType {
+  user
+  system
+
+  @@map("actor_type")
+}
+
+/// One managed service provider. Maps 1:1 to a Clerk organization.
+model Tenant {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clerkOrgId String   @unique @map("clerk_org_id")
+  name       String
+  /// Hours added to an asset's expected frequency before it counts as missed.
+  graceHours Int      @default(2) @map("grace_hours")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  users                User[]
+  integrations         Integration[]
+  clients              Client[]
+  vendorClientMappings VendorClientMapping[]
+  assets               Asset[]
+  backupResults        BackupResult[]
+  incidents            Incident[]
+  auditLogs            AuditLog[]
+
+  @@map("tenants")
+}
+
+/// A person's membership of one tenant. Someone in two tenants has two rows.
+/// Rows are deactivated, not deleted, so audit entries stay attributable.
+model User {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  clerkUserId   String    @map("clerk_user_id")
+  email         String
+  name          String?
+  role          UserRole  @default(technician)
+  deactivatedAt DateTime? @map("deactivated_at") @db.Timestamptz(3)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant                Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  acknowledgedIncidents Incident[]
+  auditLogs             AuditLog[]
+
+  @@unique([tenantId, clerkUserId])
+  @@unique([tenantId, id])
+  @@map("users")
+}
+
+/// A connection to one vendor account.
+model Integration {
+  id                String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId          String     @map("tenant_id") @db.Uuid
+  vendor            Vendor
+  name              String
+  /// Envelope-encrypted credentials. Never selected for the browser.
+  credentialsEnc    Json       @map("credentials_enc")
+  /// Last characters of the public key: the only credential-derived value shown in the UI.
+  credentialHint    String?    @map("credential_hint")
+  lastSyncAt        DateTime?  @map("last_sync_at") @db.Timestamptz(3)
+  lastSyncStartedAt DateTime?  @map("last_sync_started_at") @db.Timestamptz(3)
+  syncStatus        SyncStatus @default(never) @map("sync_status")
+  /// Sanitized, human-readable reason for the last failed sync.
+  lastSyncError     String?    @map("last_sync_error")
+  createdAt         DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime   @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant               Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vendorClientMappings VendorClientMapping[]
+  assets               Asset[]
+  backupResults        BackupResult[]
+
+  @@unique([tenantId, name])
+  @@unique([tenantId, id])
+  @@map("integrations")
+}
+
+/// One of the MSP's customers.
+model Client {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  name      String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant               Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vendorClientMappings VendorClientMapping[]
+  assets               Asset[]
+
+  @@unique([tenantId, name])
+  @@unique([tenantId, id])
+  @@map("clients")
+}
+
+/// Links a vendor's own notion of a customer to a Client, so several vendors
+/// can feed one client.
+model VendorClientMapping {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId         String   @map("tenant_id") @db.Uuid
+  integrationId    String   @map("integration_id") @db.Uuid
+  clientId         String   @map("client_id") @db.Uuid
+  vendorClientId   String   @map("vendor_client_id")
+  vendorClientName String   @map("vendor_client_name")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  integration Integration @relation(fields: [tenantId, integrationId], references: [tenantId, id], onDelete: Cascade)
+  client      Client      @relation(fields: [tenantId, clientId], references: [tenantId, id], onDelete: Cascade)
+
+  @@unique([integrationId, vendorClientId])
+  @@index([tenantId, clientId])
+  @@map("vendor_client_mappings")
+}
+
+/// Something that is backed up: an agent, a share, a virtual machine.
+model Asset {
+  id                     String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId               String       @map("tenant_id") @db.Uuid
+  clientId               String       @map("client_id") @db.Uuid
+  integrationId          String       @map("integration_id") @db.Uuid
+  vendorAssetId          String       @map("vendor_asset_id")
+  name                   String
+  /// Vendor's asset kind, lower-cased: agent, share, vm, ...
+  type                   String
+  /// The appliance or host the asset is protected by, when the vendor has one.
+  deviceName             String?      @map("device_name")
+  expectedFrequencyHours Int          @default(24) @map("expected_frequency_hours")
+  slaHours               Int          @default(72) @map("sla_hours")
+  mutedUntil             DateTime?    @map("muted_until") @db.Timestamptz(3)
+  isPaused               Boolean      @default(false) @map("is_paused")
+  isArchived             Boolean      @default(false) @map("is_archived")
+  firstSeenAt            DateTime     @default(now()) @map("first_seen_at") @db.Timestamptz(3)
+  lastSeenAt             DateTime     @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  // Denormalized from backup_results by the sync job, so the dashboard does
+  // not aggregate history on every load.
+  lastResultAt           DateTime?    @map("last_result_at") @db.Timestamptz(3)
+  lastSuccessAt          DateTime?    @map("last_success_at") @db.Timestamptz(3)
+  currentStatus          BackupStatus @default(unknown) @map("current_status")
+  createdAt              DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  client        Client         @relation(fields: [tenantId, clientId], references: [tenantId, id], onDelete: Cascade)
+  integration   Integration    @relation(fields: [tenantId, integrationId], references: [tenantId, id], onDelete: Cascade)
+  backupResults BackupResult[]
+  incidents     Incident[]
+
+  @@unique([integrationId, vendorAssetId])
+  @@unique([tenantId, id])
+  @@index([tenantId, clientId])
+  @@index([tenantId, currentStatus])
+  @@map("assets")
+}
+
+/// One backup attempt as reported by a vendor, normalized.
+model BackupResult {
+  id                 String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId           String       @map("tenant_id") @db.Uuid
+  assetId            String       @map("asset_id") @db.Uuid
+  integrationId      String       @map("integration_id") @db.Uuid
+  /// Stable id for this attempt within the asset. Makes re-syncing idempotent.
+  vendorResultId     String       @map("vendor_result_id")
+  startedAt          DateTime     @map("started_at") @db.Timestamptz(3)
+  endedAt            DateTime?    @map("ended_at") @db.Timestamptz(3)
+  status             BackupStatus
+  /// The vendor's own status value, verbatim.
+  vendorStatusRaw    String       @map("vendor_status_raw")
+  message            String?
+  /// Null when the vendor did not attempt screenshot verification.
+  screenshotVerified Boolean?     @map("screenshot_verified")
+  /// The vendor's payload for this attempt, as received. Never logged.
+  rawPayload         Json         @map("raw_payload")
+  createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  asset       Asset       @relation(fields: [tenantId, assetId], references: [tenantId, id], onDelete: Cascade)
+  integration Integration @relation(fields: [tenantId, integrationId], references: [tenantId, id], onDelete: Cascade)
+
+  @@unique([assetId, vendorResultId])
+  @@index([tenantId, assetId, startedAt(sort: Desc)])
+  @@map("backup_results")
+}
+
+/// A problem with an asset that stays open until it resolves. At most one open
+/// incident per asset per type (partial unique index, in SQL).
+model Incident {
+  id                   String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId             String       @map("tenant_id") @db.Uuid
+  assetId              String       @map("asset_id") @db.Uuid
+  type                 IncidentType
+  openedAt             DateTime     @default(now()) @map("opened_at") @db.Timestamptz(3)
+  closedAt             DateTime?    @map("closed_at") @db.Timestamptz(3)
+  acknowledgedByUserId String?      @map("acknowledged_by_user_id") @db.Uuid
+  acknowledgedAt       DateTime?    @map("acknowledged_at") @db.Timestamptz(3)
+  createdAt            DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant         Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  asset          Asset  @relation(fields: [tenantId, assetId], references: [tenantId, id], onDelete: Cascade)
+  acknowledgedBy User?  @relation(fields: [tenantId, acknowledgedByUserId], references: [tenantId, id], onDelete: NoAction)
+
+  @@index([tenantId, closedAt])
+  @@index([tenantId, assetId])
+  @@map("incidents")
+}
+
+/// Append-only record of who did what. The runtime role can insert and read
+/// but cannot update or delete.
+model AuditLog {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String    @map("tenant_id") @db.Uuid
+  actorType   ActorType @map("actor_type")
+  actorUserId String?   @map("actor_user_id") @db.Uuid
+  /// Dotted verb, for example `integration.created`.
+  action      String
+  targetType  String?   @map("target_type")
+  targetId    String?   @map("target_id")
+  /// Context for the action. Must never contain credentials or vendor payloads.
+  metadata    Json      @default("{}")
+  ip          String?
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  actor  User?  @relation(fields: [tenantId, actorUserId], references: [tenantId, id], onDelete: NoAction)
+
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@map("audit_logs")
+}

@@ -10,7 +10,6 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
       # Read by docker/postgres/init/01-app-role.sh on first start.
-      APP_DB_USER: ${APP_DB_USER:?set APP_DB_USER in .env}
       APP_DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env}
     ports:
       # Bound to loopback so the dev database is never exposed on the network.

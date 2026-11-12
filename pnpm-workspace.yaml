@@ -4,4 +4,13 @@ packages:
 
 # pnpm 10 blocks dependency install scripts unless they are listed here.
 onlyBuiltDependencies:
+  - "@prisma/engines"
   - esbuild
+  - prisma
+
+# eslint-plugin-react and friends (pulled in by eslint-config-next) have not
+# widened their declared peer range to ESLint 10 yet, though they work with it.
+# ESLint 9 is end-of-life. Remove this once the plugins catch up.
+peerDependencyRules:
+  allowedVersions:
+    eslint: "10"

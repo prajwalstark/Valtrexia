@@ -9,7 +9,7 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..")
 /** Directories that hold application source. Docs at the repo root may name the product. */
 const SOURCE_ROOTS = ["apps", "packages"];
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".css", ".html", ".mdx"]);
-const SKIP_DIRS = new Set(["node_modules", ".next", "dist", "coverage", ".turbo"]);
+const SKIP_DIRS = new Set(["node_modules", ".next", "dist", "coverage", ".turbo", "generated"]);
 
 /** The only files allowed to contain the display name or tagline as a literal. */
 const ALLOWED = new Set([

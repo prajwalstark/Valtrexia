@@ -15,5 +15,6 @@ export default defineConfig([
     "**/dist/**",
     "**/coverage/**",
     "**/next-env.d.ts",
+    "packages/db/src/generated/**",
   ]),
 ]);

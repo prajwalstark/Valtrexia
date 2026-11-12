@@ -1,11 +1,30 @@
 import { defineConfig } from "vitest/config";
 
-// One root config for now. Step 3 adds a separate project for the database
-// integration tests, which need a running Postgres.
 export default defineConfig({
   test: {
-    include: ["packages/*/src/**/*.test.ts", "apps/*/src/**/*.test.ts"],
-    environment: "node",
-    passWithNoTests: false,
+    projects: [
+      {
+        // Pure logic. No services required.
+        test: {
+          name: "unit",
+          environment: "node",
+          include: ["packages/*/src/**/*.test.ts", "apps/*/src/**/*.test.ts"],
+          exclude: ["**/*.db.test.ts", "**/node_modules/**", "**/generated/**"],
+        },
+      },
+      {
+        // Runs against a real Postgres: row-level security cannot be tested
+        // with a fake. The global setup builds a throwaway database.
+        test: {
+          name: "db",
+          environment: "node",
+          include: ["packages/*/src/**/*.db.test.ts"],
+          globalSetup: ["packages/db/test/global-setup.ts"],
+          fileParallelism: false,
+          testTimeout: 20_000,
+          hookTimeout: 60_000,
+        },
+      },
+    ],
   },
 });

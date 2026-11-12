@@ -16,3 +16,6 @@ coverage/
 
 # Next.js generated types
 next-env.d.ts
+
+# Generated Prisma client
+packages/db/src/generated/

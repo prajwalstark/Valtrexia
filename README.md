@@ -33,7 +33,7 @@ apps/
   web/            Next.js app: shell, sign-in, onboarding, dashboard, integrations.
 packages/
   core/           Pure logic with no I/O: brand config and vendor catalog now; rules and crypto later.
-  db/             Database client, migrations, tenant-scoped access. Step 3.
+  db/             Prisma schema, migrations, row-level security, tenant-scoped access.
   connectors/     Vendor connector interface and implementations. Steps 5 and 8.
 docker/           Files mounted into the local Postgres container.
 ```
@@ -72,36 +72,66 @@ Internal packages are consumed as TypeScript source (`exports` points at `src/in
    pnpm infra:up
    ```
 
-5. Check that everything is wired up.
+5. Apply the database migrations.
+
+   ```bash
+   pnpm db:migrate
+   ```
+
+6. Check that everything is wired up. This runs the database tests too, so Postgres must be up.
 
    ```bash
    pnpm check
    ```
 
-6. Start the web app and open http://localhost:3000.
+7. Start the web app and open http://localhost:3000.
 
    ```bash
    pnpm dev
    ```
 
-Sign-in is not connected yet, so the app opens without an account. Database migrations and seeding are added in later steps; this section grows with them.
+Sign-in is not connected yet, so the app opens without an account. Seeding is added in a later step; this section grows with it.
 
-### Local database roles
+## Tenant isolation
 
-Compose creates two Postgres roles, both configured in `.env`:
+Every MSP is a tenant, and one tenant must never see another's data. That is enforced in Postgres, not only in application code.
 
-| Role              | Used by                        | Privileges                                                        |
-| ----------------- | ------------------------------ | ----------------------------------------------------------------- |
-| `valtrexia_owner` | Migrations and the seed script | Owns the schema                                                   |
-| `valtrexia_app`   | The web app and the worker     | Not a superuser, cannot bypass row-level security, owns no tables |
+| Role              | Used by                    | Privileges                                                        |
+| ----------------- | -------------------------- | ----------------------------------------------------------------- |
+| `valtrexia_owner` | Migrations only            | Owns the tables                                                   |
+| `valtrexia_app`   | The web app and the worker | Not a superuser, cannot bypass row-level security, owns no tables |
 
-The app role is created by `docker/postgres/init/01-app-role.sh`, which only runs when the data volume is first created. If you change `APP_DB_USER` or `APP_DB_PASSWORD` afterwards, recreate the volume:
+- Every table except `tenants` carries `tenant_id` and has a row-level security policy on it.
+- Application code reaches tenant data only through `withTenant(tenantId, fn)` from `@valtrexia/db`. It opens a transaction, sets the tenant for that transaction only, and hands `fn` a query client. With no tenant set, every query returns nothing.
+- The Prisma client is not exported from `@valtrexia/db`, so there is no way to query outside a tenant by accident.
+- Child rows reference their parents by `(tenant_id, id)`, so a row cannot point at another tenant's data even if application code tried.
+- Three operations must run before a tenant is known: finding a tenant from a Clerk organization, creating a tenant, and listing which integrations are due to sync. Each is a narrow SQL function that returns ids only.
+- `Db.assertSafeRole()` refuses to continue if the app is connected as a superuser, a role that can bypass row-level security, or a table owner.
+
+The policies, grants and functions are hand-written SQL in `packages/db/prisma/migrations/*_tenant_isolation`. `packages/db/src/tenant-isolation.db.test.ts` tests all of it against a real Postgres, and fails if a new table is added without a policy.
+
+### Database roles
+
+With Docker Compose, both roles are created for you from `.env`. The app role is created by `docker/postgres/init/01-app-role.sh`, which only runs when the data volume is first created. If you change `APP_DB_PASSWORD` afterwards, recreate the volume (this deletes all local data):
 
 ```bash
 docker compose down --volumes
 ```
 
-That deletes all local data.
+Without Docker, or on managed Postgres, create the app role yourself before migrating, with a password of your choosing:
+
+```sql
+CREATE ROLE valtrexia_app LOGIN PASSWORD '...' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+```
+
+The owner role needs `CREATEDB` to run the database tests, which build and drop a throwaway `<database>_test`.
+
+### Changing the schema
+
+1. Edit `packages/db/prisma/schema.prisma`.
+2. Generate the SQL for the change and review it. Prisma does not know about the policies or the partial index on `incidents`, so remove any statement that would drop them.
+3. Save it as a new folder under `packages/db/prisma/migrations`. A new table needs `tenant_id`, a composite key if it has children, grants for `valtrexia_app`, and a `tenant_isolation` policy; copy the pattern from the tenant isolation migration.
+4. Run `pnpm db:migrate`, `pnpm db:generate` and `pnpm test:db`.
 
 ## Commands
 

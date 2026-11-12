@@ -236,6 +236,12 @@ Changes made during the build:
 - **ESLint is set up in step 2**, alongside the Next.js app that brings its config.
 - **shadcn/ui components are hand-written** in the standard shadcn layout (`components.json`, `components/ui`, `cn`). The shadcn registry was unreachable from the build session, so the CLI could not fetch them. The CLI works against this layout on a normal machine.
 - **The typeface (Archivo) is self-hosted** with `next/font/local` instead of fetched from Google Fonts, so builds work offline and the app makes no third-party font request.
+- **Row-level security is enabled, not forced.** Section 5 said "enabled and forced". `FORCE` only changes behaviour for the table owner, which the app never connects as, and it would stop the three security-definer functions (which run as the owner) from making their cross-tenant lookups unless the owner had `BYPASSRLS`, a superuser-only attribute that managed Postgres does not hand out. In its place, `Db.assertSafeRole()` refuses to run as a superuser, a role with `BYPASSRLS`, or a table owner. That also covers a superuser owner, which `FORCE` would not.
+- **Policies apply to every role**, not only `valtrexia_app`, so any role added later is tenant-scoped by default.
+- **The runtime role's name is fixed** (`valtrexia_app`) because the migrations grant to it by name. Only its password is configurable.
+- **Prisma is pinned to 7.10.1.** The CLI's `latest` tag on npm points at an 8.0 release candidate.
+- **User rows are deactivated, not deleted** (`deactivatedAt`), so audit entries and incident acknowledgements stay attributable.
+- **The "ciphertext moved to another tenant fails to decrypt" test moves to step 4**, where the encryption code is written.
 - **Navigation lists only pages that exist**: Dashboard and Integrations. The plan's route list is unchanged.
 
 One environment note: Docker's daemon is not running in this cloud session. I will write and document `docker-compose.yml` for your machine, and verify here against the Postgres 16 and Redis 7 already installed in the container. The same tests run against either.
