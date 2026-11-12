@@ -1,10 +1,9 @@
 import "server-only";
-import { isIP } from "node:net";
 import { auth, clerkClient, currentUser } from "@clerk/nextjs/server";
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { cache } from "react";
 import { getSafeDb } from "./db";
+import { clientIp } from "./request";
 import {
   resolveSession,
   type IdentityLookup,
@@ -20,13 +19,6 @@ export class ForbiddenError extends Error {
     super("Only workspace owners can do this.");
     this.name = "ForbiddenError";
   }
-}
-
-/** Best-effort client address for the audit log. Informational, not trusted. */
-async function clientIp(): Promise<string | null> {
-  const forwarded = (await headers()).get("x-forwarded-for");
-  const first = forwarded?.split(",")[0]?.trim();
-  return first && isIP(first) ? first : null;
 }
 
 const identityLookup: IdentityLookup = {

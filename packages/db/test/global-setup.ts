@@ -65,7 +65,7 @@ export default async function setup(project: TestProject): Promise<() => Promise
     );
   }
   try {
-    await admin.query(`DROP DATABASE IF EXISTS ${testName} WITH (FORCE)`);
+    await dropDatabase(admin, testName);
     await admin.query(`CREATE DATABASE ${testName}`);
   } finally {
     await admin.end();
@@ -91,9 +91,34 @@ export default async function setup(project: TestProject): Promise<() => Promise
     const cleanup = new pg.Client({ connectionString: ownerUrl });
     await cleanup.connect();
     try {
-      await cleanup.query(`DROP DATABASE IF EXISTS ${testName} WITH (FORCE)`);
+      await dropDatabase(cleanup, testName);
+    } catch {
+      // Not worth failing a green run over: the next run drops it first.
+      console.warn(`Could not drop ${testName}; it will be replaced on the next run.`);
     } finally {
       await cleanup.end();
     }
   };
+}
+
+/**
+ * Drops a database, waiting briefly for other sessions to leave.
+ *
+ * `DROP DATABASE ... WITH (FORCE)` would be simpler, but it terminates other
+ * sessions, and a non-superuser owner may not terminate the runtime role's.
+ * Pools close asynchronously, so a connection can outlive its test by a
+ * moment; waiting covers that without needing extra privileges.
+ */
+async function dropDatabase(client: pg.Client, name: string): Promise<void> {
+  const attempts = 25;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await client.query(`DROP DATABASE IF EXISTS ${name}`);
+      return;
+    } catch (error) {
+      const inUse = (error as { code?: string }).code === "55006"; // object_in_use
+      if (!inUse || attempt >= attempts) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+  }
 }

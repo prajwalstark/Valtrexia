@@ -108,3 +108,144 @@ export async function decryptIntegrationCredentials(
     keyProvider,
   );
 }
+
+/** An integration with this name already exists in the tenant. */
+export class IntegrationNameTakenError extends Error {
+  constructor() {
+    super("An integration with this name already exists.");
+    this.name = "IntegrationNameTakenError";
+  }
+}
+
+/** Every integration in the tenant, oldest first, without credentials. */
+export async function listIntegrations({ tx }: TenantContext): Promise<IntegrationSummary[]> {
+  return tx.integration.findMany({
+    orderBy: { createdAt: "asc" },
+    select: integrationSummarySelect,
+  });
+}
+
+/** One integration without credentials, or null if this tenant has no such integration. */
+export async function getIntegrationSummary(
+  { tx }: TenantContext,
+  id: string,
+): Promise<IntegrationSummary | null> {
+  return tx.integration.findUnique({ where: { id }, select: integrationSummarySelect });
+}
+
+/** Whether the tenant already has an integration called `name`. */
+export async function integrationNameExists({ tx }: TenantContext, name: string): Promise<boolean> {
+  return (await tx.integration.count({ where: { name } })) > 0;
+}
+
+/**
+ * Loads and decrypts an integration's credentials. Server-side only, for the
+ * sync job and the connection test. Returns null if this tenant has no such
+ * integration.
+ */
+export async function loadIntegrationCredentials(
+  { tx, tenantId }: TenantContext,
+  keyProvider: KeyProvider,
+  id: string,
+): Promise<{ vendor: VendorId; name: string; credentials: Secret<unknown> } | null> {
+  const row = await tx.integration.findUnique({
+    where: { id },
+    select: { id: true, vendor: true, name: true, credentialsEnc: true },
+  });
+  if (!row) return null;
+  return {
+    vendor: row.vendor,
+    name: row.name,
+    credentials: await decryptIntegrationCredentials({ tenantId }, keyProvider, row),
+  };
+}
+
+export interface ReplaceCredentialsInput {
+  id: string;
+  credentials: Secret<unknown>;
+  credentialHint?: string | null;
+  actorUserId: string | null;
+  ip?: string | null;
+}
+
+/**
+ * Replaces an integration's credentials with a freshly encrypted set and
+ * makes it due for a sync straight away. Returns null if this tenant has no
+ * such integration.
+ */
+export async function replaceIntegrationCredentials(
+  { tx, tenantId }: TenantContext,
+  keyProvider: KeyProvider,
+  input: ReplaceCredentialsInput,
+): Promise<IntegrationSummary | null> {
+  const existing = await tx.integration.findUnique({
+    where: { id: input.id },
+    select: { id: true, vendor: true, lastSyncAt: true },
+  });
+  if (!existing) return null;
+
+  const envelope = await encryptJson(
+    input.credentials.expose(),
+    credentialContext(tenantId, existing.id),
+    keyProvider,
+  );
+  const updated = await tx.integration.update({
+    where: { id: existing.id },
+    data: {
+      credentialsEnc: envelope satisfies EncryptedEnvelope,
+      credentialHint: input.credentialHint ?? null,
+      // Clear the old failure and let the scheduler pick it up now.
+      lastSyncError: null,
+      lastSyncStartedAt: null,
+      syncStatus: existing.lastSyncAt ? "ok" : "never",
+    },
+    select: integrationSummarySelect,
+  });
+  await recordAudit(
+    { tx, tenantId },
+    {
+      action: "integration.credentials_replaced",
+      actorUserId: input.actorUserId,
+      targetType: "integration",
+      targetId: existing.id,
+      metadata: { vendor: existing.vendor },
+      ip: input.ip ?? null,
+    },
+  );
+  return updated;
+}
+
+/**
+ * Deletes an integration together with the assets, results and incidents
+ * that came from it. Clients are kept: they belong to the MSP, and another
+ * vendor may feed them. Returns what was removed, or null if this tenant has
+ * no such integration.
+ */
+export async function deleteIntegration(
+  { tx, tenantId }: TenantContext,
+  input: { id: string; actorUserId: string | null; ip?: string | null },
+): Promise<{ name: string; assetsRemoved: number } | null> {
+  const existing = await tx.integration.findUnique({
+    where: { id: input.id },
+    select: { id: true, vendor: true, name: true, _count: { select: { assets: true } } },
+  });
+  if (!existing) return null;
+
+  await tx.integration.delete({ where: { id: existing.id } });
+  await recordAudit(
+    { tx, tenantId },
+    {
+      action: "integration.deleted",
+      actorUserId: input.actorUserId,
+      targetType: "integration",
+      targetId: existing.id,
+      metadata: {
+        vendor: existing.vendor,
+        name: existing.name,
+        assetsRemoved: existing._count.assets,
+      },
+      ip: input.ip ?? null,
+    },
+  );
+  return { name: existing.name, assetsRemoved: existing._count.assets };
+}

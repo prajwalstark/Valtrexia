@@ -4,10 +4,10 @@ import { isMockAllowed } from "@valtrexia/connectors";
 import { getVendor } from "@valtrexia/core";
 import { Secret } from "@valtrexia/core/server";
 import { createIntegration } from "@valtrexia/db";
-import { headers } from "next/headers";
 import { ForbiddenError, requireOwner } from "@/lib/auth";
 import { getSafeDb } from "@/lib/db";
 import { getKeyProvider } from "@/lib/keys";
+import { clientIp } from "@/lib/request";
 
 export type ActionResult = { ok: true } | { ok: false; message: string };
 
@@ -30,7 +30,7 @@ export async function connectDemoData(): Promise<ActionResult> {
   }
 
   const name = getVendor("mock").name;
-  const forwarded = (await headers()).get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
+  const ip = await clientIp();
   const db = await getSafeDb();
   await db.withTenant(session.tenantId, async (context) => {
     const existing = await context.tx.integration.findFirst({
@@ -44,7 +44,7 @@ export async function connectDemoData(): Promise<ActionResult> {
       // Not a secret: it only selects which generated fleet to show.
       credentials: new Secret({ seed: "demo" }),
       actorUserId: session.userId,
-      ip: forwarded,
+      ip,
     });
   });
   return { ok: true };

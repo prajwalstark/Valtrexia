@@ -256,6 +256,10 @@ Changes made during the build:
 - **`organization.deleted` does not delete tenant data.** Removal is left as a deliberate operator action.
 - **The web app loads the repository-root `.env`** from `next.config.ts`, so one file serves web, worker and database tooling.
 - **Building the web app needs `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`.**
+- **Datto's connection test was built in step 7**, ahead of the rest of the connector, so that "Test connection" on the integrations page is real. Listing clients, assets and results follows in step 8; until then a Datto integration can be saved but reports that syncing is not available yet.
+- **Saving requires a passing connection test.** Keys Datto rejects, or cannot be reached to check, are not stored.
+- **Replace keys and Disconnect were added** to the integrations page. The plan's scope line listed only adding credentials and testing; the approved decision 6 said owners add, replace and delete.
+- **The connection-test rate limit is in memory**, per web instance. Section 6 did not specify where it lives. Redis is the place for it if a tighter bound is needed.
 - **Decrypted credentials are wrapped in a `Secret` type** that prints as `[redacted]`. Not in the original plan; it backs up the logger's redaction.
 - **Navigation lists only pages that exist**: Dashboard and Integrations. The plan's route list is unchanged.
 

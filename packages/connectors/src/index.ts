@@ -1,3 +1,10 @@
+export { DATTO_DEFAULT_BASE_URL } from "./datto/client";
+export { DattoConnector } from "./datto/connector";
+export {
+  dattoCredentialHint,
+  dattoCredentialsSchema,
+  type DattoCredentials,
+} from "./datto/credentials";
 export {
   AuthError,
   ConnectorError,

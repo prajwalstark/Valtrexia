@@ -345,7 +345,7 @@ describe("connector registry", () => {
     }
   });
 
-  it.each(["datto_bcdr", "kaseya_uniview", "veeam_vspc"] as const)(
+  it.each(["kaseya_uniview", "veeam_vspc"] as const)(
     "reports %s as not available yet",
     (vendor) => {
       expect(() => createConnector(vendor, creds({}), { allowMock: true })).toThrow(

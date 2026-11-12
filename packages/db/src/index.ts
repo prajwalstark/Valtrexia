@@ -22,9 +22,17 @@ export {
 export {
   createIntegration,
   decryptIntegrationCredentials,
+  deleteIntegration,
+  getIntegrationSummary,
+  integrationNameExists,
+  IntegrationNameTakenError,
   integrationSummarySelect,
+  listIntegrations,
+  loadIntegrationCredentials,
+  replaceIntegrationCredentials,
   type CreateIntegrationInput,
   type IntegrationSummary,
+  type ReplaceCredentialsInput,
 } from "./repositories/integrations";
 export {
   ActorType,

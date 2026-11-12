@@ -133,6 +133,28 @@ The decision logic lives in `apps/web/lib/session-core.ts` with no Clerk code in
 
 The app works without the webhook, since sign-in creates whatever is missing. The webhook matters for changes made while the person is not signed in.
 
+## Integrations
+
+Owners connect vendors on the Integrations page. Technicians can see what is connected and its sync state, but cannot test, change or remove anything.
+
+**Connecting Datto BCDR.** Enter a REST API public key and secret key from the Datto Partner Portal. "Test connection" checks the pair without saving it. "Save and connect" tests it again and only stores it if Datto accepts it, so a mistyped key is caught immediately rather than as a failed sync later. The test reads one device record and changes nothing.
+
+**What happens to the keys.**
+
+- They are validated, tested, encrypted (see [Credentials and logs](#credentials-and-logs)) and stored. Nothing the server sends back to the browser contains a key, a ciphertext or anything derived from the secret key.
+- A saved integration shows only the last four characters of its public key. Saved keys cannot be viewed, only replaced.
+- "Test connection" on a saved integration decrypts the keys on the server, uses them, and returns only the outcome.
+- Connection tests are limited to ten per workspace per minute, so the page cannot be used to try keys against a vendor at speed. The limit is held in memory per web instance.
+- Every test, save, replacement and disconnection is written to the audit log with who did it and the outcome, and never with key material.
+
+**Replacing keys** re-tests and re-encrypts, clears any sync error, and makes the integration due for a sync straight away. Backup history is kept.
+
+**Disconnecting** deletes the saved keys and every asset, backup result and incident that came from the integration. Clients are kept. It requires typing the integration's name.
+
+Datto's API root can be overridden with `DATTO_API_BASE_URL` for a sandbox. It is read from server configuration only and never from a request.
+
+The logic is in `apps/web/lib/integrations-core.ts`, with no framework code, and is tested against Postgres with a stand-in for Datto. The server actions in `apps/web/lib/actions/integrations.ts` are thin wrappers around it.
+
 ## Connectors
 
 Every vendor implements one interface in `packages/connectors`:
