@@ -208,6 +208,7 @@ model Asset {
   // Denormalized from backup_results by the sync job, so the dashboard does
   // not aggregate history on every load.
   lastResultAt           DateTime?    @map("last_result_at") @db.Timestamptz(3)
+  /// When the last completed backup finished. A warning counts as completed.
   lastSuccessAt          DateTime?    @map("last_success_at") @db.Timestamptz(3)
   currentStatus          BackupStatus @default(unknown) @map("current_status")
   createdAt              DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)

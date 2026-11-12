@@ -242,6 +242,11 @@ Changes made during the build:
 - **Prisma is pinned to 7.10.1.** The CLI's `latest` tag on npm points at an 8.0 release candidate.
 - **User rows are deactivated, not deleted** (`deactivatedAt`), so audit entries and incident acknowledgements stay attributable.
 - **The "ciphertext moved to another tenant fails to decrypt" test moves to step 4**, where the encryption code is written.
+- **The missed-backup rule returns four verdicts**, not a yes/no: `missed`, `ok`, `suppressed` (archived, paused or muted) and `indeterminate` (sync never ran, is failing, or is more than three intervals old). An indeterminate verdict leaves an open incident untouched.
+- **Client health has a fourth level, `none`**, for a client with no watched assets. Section 6 listed red, amber and green only.
+- **`Asset.lastSuccessAt` means the last completed backup**, success or warning, because that is what the missed rule measures from.
+- **`packages/core` has two entry points.** `@valtrexia/core` is pure and client-safe; `@valtrexia/core/server` holds the encryption and logging code, which need Node APIs.
+- **Decrypted credentials are wrapped in a `Secret` type** that prints as `[redacted]`. Not in the original plan; it backs up the logger's redaction.
 - **Navigation lists only pages that exist**: Dashboard and Integrations. The plan's route list is unchanged.
 
 One environment note: Docker's daemon is not running in this cloud session. I will write and document `docker-compose.yml` for your machine, and verify here against the Postgres 16 and Redis 7 already installed in the container. The same tests run against either.

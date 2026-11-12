@@ -4,9 +4,14 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./server": "./src/server.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "pino": "^10.4.0",
+    "zod": "^4.6.7"
   }
 }

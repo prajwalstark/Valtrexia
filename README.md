@@ -32,7 +32,8 @@ apps/
   worker/         Sync worker (BullMQ). Entry point only, until step 9.
   web/            Next.js app: shell, sign-in, onboarding, dashboard, integrations.
 packages/
-  core/           Pure logic with no I/O: brand config and vendor catalog now; rules and crypto later.
+  core/           Shared logic: brand, vendors, statuses, the missed-backup rule, health roll-up,
+                  and (server entry only) credential encryption and the redacting logger.
   db/             Prisma schema, migrations, row-level security, tenant-scoped access.
   connectors/     Vendor connector interface and implementations. Steps 5 and 8.
 docker/           Files mounted into the local Postgres container.
@@ -91,6 +92,38 @@ Internal packages are consumed as TypeScript source (`exports` points at `src/in
    ```
 
 Sign-in is not connected yet, so the app opens without an account. Seeding is added in a later step; this section grows with it.
+
+## How backup health is decided
+
+The logic is pure functions in `packages/core`, with no database or network access, so it is tested exhaustively.
+
+**Statuses.** Every vendor result is normalized to one of `success`, `warning`, `failed`, `missed`, `running` or `unknown`. A warning still counts as a completed backup: one that succeeded but failed screenshot verification produced a restore point.
+
+**Missed backups** (`evaluateMissedBackup`). An asset is missed when its last completed backup, or its discovery if it has never had one, is more than its expected frequency plus the tenant's grace period ago. The rule returns one of four verdicts:
+
+| Verdict         | When                                                                         | Effect on a missed-backup incident |
+| --------------- | ---------------------------------------------------------------------------- | ---------------------------------- |
+| `missed`        | No completed backup inside the window                                        | Open one                           |
+| `ok`            | A completed backup inside the window                                         | Close it                           |
+| `suppressed`    | The asset is archived, paused or muted                                       | Close it                           |
+| `indeterminate` | The integration has never synced, is failing, or last synced over 45 min ago | Leave it as it is                  |
+
+`indeterminate` exists so that a vendor outage does not raise a missed-backup incident on every asset that vendor protects.
+
+**Client health** (`summarizeClientHealth`). Red if any watched asset has failed or missed; amber for a warning, an uninterpretable status, or a failing vendor sync; green otherwise; and `none` when a client has no watched assets. Muted, paused and archived assets are left out. Clients sort worst first, then by number of affected assets, then by name.
+
+## Credentials and logs
+
+Vendor credentials are encrypted before they reach the database, with envelope encryption (`@valtrexia/core/server`):
+
+- Each credential set gets its own random data key (AES-256-GCM). The data key is wrapped by a key-encryption key and stored beside the ciphertext.
+- Both layers are bound to the tenant id and integration id. A ciphertext copied to another tenant's row, or another integration, will not decrypt.
+- The key-encryption key comes from a `KeyProvider`. In development that is `VALTREXIA_LOCAL_KEK`; the local provider refuses to run when `NODE_ENV=production`, where a KMS provider is required. The KMS provider is not written yet.
+- Decrypted values come back wrapped in `Secret`, which prints as `[redacted]` if logged, serialized or inspected. The value is only reachable through `.expose()`.
+
+`createLogger` returns a structured JSON logger that redacts before writing: properties named like credentials, tokens, headers or raw vendor payloads at any depth, and credentials embedded in message text (auth headers, `user:password@` URLs, secret query parameters). Redaction is a safety net; do not pass secrets to the logger.
+
+`@valtrexia/core` is safe to import anywhere, including client components. `@valtrexia/core/server` uses Node APIs and must only be imported by server code.
 
 ## Tenant isolation
 
