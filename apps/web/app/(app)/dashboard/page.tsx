@@ -1,11 +1,14 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { PageHeader } from "@/components/shell/page-header";
+import { requireTenant } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 
 export const metadata: Metadata = { title: "Dashboard" };
 
-export default function DashboardPage() {
+export default async function DashboardPage() {
+  await requireTenant();
+
   return (
     <>
       <PageHeader

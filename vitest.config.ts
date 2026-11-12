@@ -8,7 +8,11 @@ export default defineConfig({
         test: {
           name: "unit",
           environment: "node",
-          include: ["packages/*/src/**/*.test.ts", "apps/*/src/**/*.test.ts"],
+          include: [
+            "packages/*/src/**/*.test.ts",
+            "apps/*/src/**/*.test.ts",
+            "apps/web/lib/**/*.test.ts",
+          ],
           exclude: ["**/*.db.test.ts", "**/node_modules/**", "**/generated/**"],
         },
       },
@@ -18,7 +22,11 @@ export default defineConfig({
         test: {
           name: "db",
           environment: "node",
-          include: ["packages/*/src/**/*.db.test.ts", "apps/*/src/**/*.db.test.ts"],
+          include: [
+            "packages/*/src/**/*.db.test.ts",
+            "apps/*/src/**/*.db.test.ts",
+            "apps/web/lib/**/*.db.test.ts",
+          ],
           globalSetup: ["packages/db/test/global-setup.ts"],
           fileParallelism: false,
           testTimeout: 20_000,

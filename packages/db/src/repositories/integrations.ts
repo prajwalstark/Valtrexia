@@ -9,6 +9,7 @@ import {
 } from "@valtrexia/core/server";
 import type { TenantContext } from "../db";
 import type { Prisma } from "../generated/prisma/client";
+import { recordAudit } from "./audit";
 
 /**
  * Columns that are safe to hand to the interface. `credentialsEnc` is left
@@ -39,6 +40,7 @@ export interface CreateIntegrationInput {
   credentialHint?: string | null;
   /** Who is doing this, for the audit log. Null for system actions such as seeding. */
   actorUserId: string | null;
+  ip?: string | null;
 }
 
 function credentialContext(tenantId: string, integrationId: string) {
@@ -75,17 +77,17 @@ export async function createIntegration(
     select: integrationSummarySelect,
   });
 
-  await tx.auditLog.create({
-    data: {
-      tenantId,
-      actorType: input.actorUserId ? "user" : "system",
-      actorUserId: input.actorUserId,
+  await recordAudit(
+    { tx, tenantId },
+    {
       action: "integration.created",
+      actorUserId: input.actorUserId,
       targetType: "integration",
       targetId: id,
       metadata: { vendor: input.vendor, name: input.name },
+      ip: input.ip ?? null,
     },
-  });
+  );
 
   return integration;
 }

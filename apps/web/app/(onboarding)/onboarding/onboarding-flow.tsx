@@ -1,35 +1,90 @@
 "use client";
 
+import { useOrganizationList } from "@clerk/nextjs";
+import { isClerkAPIResponseError } from "@clerk/nextjs/errors";
 import { realVendors, SYNC_INTERVAL_MINUTES, vendors, type VendorId } from "@valtrexia/core";
 import { Check } from "lucide-react";
-import Link from "next/link";
-import { useId, useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
+import { useId, useState, useTransition, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { connectDemoData } from "@/lib/actions/onboarding";
 import { cn } from "@/lib/utils";
 
 const STEPS = ["Name your workspace", "Choose a backup source", "Start watching"] as const;
-
 const demoSource = vendors.find((v) => v.availability === "demo");
-const sources = [...realVendors, ...(demoSource ? [demoSource] : [])];
 
 /**
- * Three-step setup. Step state is local for now: the authentication step of
- * the build makes "Name your workspace" create the tenant, and the
- * integrations step makes the source choice collect real credentials.
+ * Three-step setup. Step 1 creates a Clerk organization, which becomes the
+ * tenant. Step 2 either connects the demo vendor or hands over to the
+ * integrations page for real credentials.
  */
-export function OnboardingFlow() {
+export function OnboardingFlow({ demoAvailable }: { demoAvailable: boolean }) {
+  const router = useRouter();
+  const { isLoaded, createOrganization, setActive, userMemberships } = useOrganizationList({
+    userMemberships: { infinite: true },
+  });
+
   const [step, setStep] = useState(0);
   const [workspace, setWorkspace] = useState("");
   const [source, setSource] = useState<VendorId>("datto_bcdr");
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
   const nameId = useId();
+  const errorId = useId();
 
+  const sources = [...realVendors, ...(demoAvailable && demoSource ? [demoSource] : [])];
   const chosen = sources.find((s) => s.id === source);
+  const existing = userMemberships?.data ?? [];
+
+  function fail(cause: unknown, fallback: string) {
+    setError(
+      isClerkAPIResponseError(cause) ? (cause.errors[0]?.longMessage ?? fallback) : fallback,
+    );
+  }
 
   function submitName(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (workspace.trim()) setStep(1);
+    const name = workspace.trim();
+    if (!name || !isLoaded) return;
+    setError(null);
+    startTransition(async () => {
+      try {
+        const organization = await createOrganization({ name });
+        await setActive({ organization: organization.id });
+        setStep(1);
+      } catch (cause) {
+        fail(cause, "The workspace could not be created. Try again.");
+      }
+    });
+  }
+
+  function openExisting(organizationId: string) {
+    if (!isLoaded) return;
+    setError(null);
+    startTransition(async () => {
+      try {
+        await setActive({ organization: organizationId });
+        router.push("/dashboard");
+      } catch (cause) {
+        fail(cause, "That workspace could not be opened. Try again.");
+      }
+    });
+  }
+
+  function submitSource() {
+    setError(null);
+    if (source !== "mock") {
+      // Real credentials are entered on the integrations page.
+      setStep(2);
+      return;
+    }
+    startTransition(async () => {
+      const result = await connectDemoData();
+      if (result.ok) setStep(2);
+      else setError(result.message);
+    });
   }
 
   return (
@@ -69,28 +124,57 @@ export function OnboardingFlow() {
 
       <div className="mt-10">
         {step === 0 ? (
-          <form onSubmit={submitName}>
-            <h1 className="font-wide text-3xl font-semibold tracking-[-0.02em]">{STEPS[0]}</h1>
-            <p className="mt-3 max-w-prose leading-relaxed text-muted-foreground">
-              A workspace holds your clients, vendors and team. Most providers use their company
-              name.
-            </p>
-            <div className="mt-8 max-w-sm">
-              <Label htmlFor={nameId}>Workspace name</Label>
-              <Input
-                id={nameId}
-                className="mt-2"
-                value={workspace}
-                onChange={(event) => setWorkspace(event.target.value)}
-                autoComplete="organization"
-                required
-                maxLength={80}
-              />
-            </div>
-            <Button type="submit" className="mt-8">
-              Continue
-            </Button>
-          </form>
+          <>
+            <form onSubmit={submitName}>
+              <h1 className="font-wide text-3xl font-semibold tracking-[-0.02em]">{STEPS[0]}</h1>
+              <p className="mt-3 max-w-prose leading-relaxed text-muted-foreground">
+                A workspace holds your clients, vendors and team. Most providers use their company
+                name.
+              </p>
+              <div className="mt-8 max-w-sm">
+                <Label htmlFor={nameId}>Workspace name</Label>
+                <Input
+                  id={nameId}
+                  className="mt-2"
+                  value={workspace}
+                  onChange={(event) => setWorkspace(event.target.value)}
+                  autoComplete="organization"
+                  required
+                  maxLength={80}
+                  aria-invalid={error ? true : undefined}
+                  aria-describedby={error ? errorId : undefined}
+                />
+              </div>
+              <Button type="submit" className="mt-8" disabled={!isLoaded || pending}>
+                {pending ? "Creating workspace…" : "Create workspace"}
+              </Button>
+            </form>
+
+            {existing.length > 0 ? (
+              <section className="mt-12 border-t border-line pt-8">
+                <h2 className="font-semibold">Or open a workspace you already belong to</h2>
+                <ul className="mt-4 divide-y divide-line rounded-lg border border-line">
+                  {existing.map((membership) => (
+                    <li
+                      key={membership.organization.id}
+                      className="flex items-center justify-between gap-4 p-4"
+                    >
+                      <span className="font-medium">{membership.organization.name}</span>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={pending}
+                        onClick={() => openExisting(membership.organization.id)}
+                      >
+                        Open
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
+          </>
         ) : null}
 
         {step === 1 ? (
@@ -138,14 +222,9 @@ export function OnboardingFlow() {
                 })}
               </div>
             </fieldset>
-            <div className="mt-8 flex gap-3">
-              <Button type="button" onClick={() => setStep(2)}>
-                Continue
-              </Button>
-              <Button type="button" variant="ghost" onClick={() => setStep(0)}>
-                Back
-              </Button>
-            </div>
+            <Button type="button" className="mt-8" disabled={pending} onClick={submitSource}>
+              {pending ? "Connecting…" : "Continue"}
+            </Button>
           </div>
         ) : null}
 
@@ -153,8 +232,9 @@ export function OnboardingFlow() {
           <div>
             <h1 className="font-wide text-3xl font-semibold tracking-[-0.02em]">{STEPS[2]}</h1>
             <p className="mt-3 max-w-prose leading-relaxed text-muted-foreground">
-              Backups are checked every {SYNC_INTERVAL_MINUTES} minutes. Clients appear on the
-              dashboard after the first check, worst first.
+              {source === "mock"
+                ? `Demo data is connected. Backups are checked every ${SYNC_INTERVAL_MINUTES} minutes, and clients appear on the dashboard after the first check, worst first.`
+                : `Your workspace is ready. Enter your ${chosen?.name ?? "vendor"} API keys next; clients appear on the dashboard after the first check.`}
             </p>
             <dl className="mt-8 divide-y divide-line rounded-lg border border-line">
               <div className="flex items-center gap-3 p-4">
@@ -168,21 +248,22 @@ export function OnboardingFlow() {
                 <dd className="ml-auto font-medium">{chosen?.name}</dd>
               </div>
             </dl>
-            <div className="mt-8 flex gap-3">
-              <Button asChild>
-                <Link href="/dashboard">Open the dashboard</Link>
-              </Button>
-              <Button type="button" variant="ghost" onClick={() => setStep(1)}>
-                Back
-              </Button>
-            </div>
+            <Button
+              type="button"
+              className="mt-8"
+              onClick={() => router.push(source === "mock" ? "/dashboard" : "/integrations")}
+            >
+              {source === "mock" ? "Open the dashboard" : "Enter API keys"}
+            </Button>
           </div>
         ) : null}
-      </div>
 
-      <p className="mt-12 border-t border-line pt-4 text-sm text-subtle-foreground">
-        This is a preview. Nothing is saved until sign-in is connected.
-      </p>
+        {error ? (
+          <p id={errorId} role="alert" className="mt-6 text-sm text-destructive">
+            {error}
+          </p>
+        ) : null}
+      </div>
     </div>
   );
 }

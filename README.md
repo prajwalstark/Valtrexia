@@ -62,7 +62,7 @@ Internal packages are consumed as TypeScript source (`exports` points at `src/in
    cp .env.example .env
    ```
 
-3. Generate a local key-encryption key and paste the output into `VALTREXIA_LOCAL_KEK` in `.env`.
+3. Add your Clerk keys to `.env` (see [Authentication](#authentication)), then generate a local key-encryption key and paste the output into `VALTREXIA_LOCAL_KEK`.
 
    ```bash
    openssl rand -base64 32
@@ -98,7 +98,40 @@ Internal packages are consumed as TypeScript source (`exports` points at `src/in
    pnpm dev
    ```
 
-Sign-in is not connected yet, so the app opens without an account and does not show the seeded data yet. The dashboard that displays it arrives in step 10.
+You will be asked to sign in, set up two-step verification and create a workspace. To attach the demo data to your workspace instead of a placeholder one, run the seed with your Clerk organization id: `SEED_CLERK_ORG_ID=org_... pnpm db:seed`. The dashboard that displays it arrives in step 10.
+
+## Authentication
+
+Sign-in is handled by [Clerk](https://clerk.com). A Clerk organization is a tenant; organization admins are owners and every other member is a technician.
+
+### Clerk setup
+
+1. Create a Clerk application and copy its publishable and secret keys into `.env`.
+2. Enable **Organizations**. Requiring organization membership is recommended, so nobody signs in without a workspace.
+3. Enable an authenticator app (TOTP) as a second factor and **require multi-factor authentication** for all users.
+4. For deployed environments, add a webhook endpoint at `https://<your-host>/api/webhooks/clerk`, subscribe it to the `organization.*` and `organizationMembership.*` events, and copy its signing secret into `CLERK_WEBHOOK_SIGNING_SECRET`.
+
+The exact names of these settings in the Clerk dashboard may differ from the wording above.
+
+### How a request is checked
+
+`proxy.ts` is the outer gate: signed in, or redirected to `/sign-in`. Everything else is decided by `requireTenant()` in `apps/web/lib/auth.ts`, which every page, server action and route handler that touches tenant data calls. In order:
+
+1. **Signed in.**
+2. **Multi-factor authentication.** Accepted if the session token shows a second factor was verified in this session, or Clerk confirms the account has one enrolled. Otherwise the user is sent to `/mfa-required`. This is enforced in the app as well as in Clerk, so a misconfigured Clerk instance does not open the door. There is no switch to turn it off.
+3. **A workspace is selected.** Otherwise the user is sent to `/onboarding`.
+4. **Tenant.** Looked up from the session's organization, and created on first sight. The tenant id is never taken from a URL, form field or header.
+5. **User.** The person's record in that tenant is created or brought up to date, following role changes made in Clerk.
+
+`requireOwner()` additionally requires the owner role. Tenant creation, new members, role changes and removals are written to the audit log.
+
+The decision logic lives in `apps/web/lib/session-core.ts` with no Clerk code in it, so it is tested directly against Postgres.
+
+### Webhook
+
+`/api/webhooks/clerk` keeps tenants and members in step with Clerk when changes happen outside a sign-in: an organization renamed, a member added, promoted or removed. Requests are verified by signature before the body is trusted. Handling is idempotent, because webhooks can be delivered more than once and out of order. A removed member is deactivated, not deleted, so the audit trail stays attributable. Deleting an organization in Clerk does **not** delete the tenant's data; that is a deliberate operator action.
+
+The app works without the webhook, since sign-in creates whatever is missing. The webhook matters for changes made while the person is not signed in.
 
 ## Connectors
 

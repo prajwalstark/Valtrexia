@@ -1,10 +1,13 @@
 import { brand, realVendors, SYNC_INTERVAL_MINUTES } from "@valtrexia/core";
 import type { Metadata } from "next";
 import { PageHeader } from "@/components/shell/page-header";
+import { requireTenant } from "@/lib/auth";
 
 export const metadata: Metadata = { title: "Integrations" };
 
-export default function IntegrationsPage() {
+export default async function IntegrationsPage() {
+  await requireTenant();
+
   return (
     <>
       <PageHeader

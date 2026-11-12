@@ -12,6 +12,13 @@ export {
   type TransactionOptions,
 } from "./db";
 export { InvalidTenantIdError, UnsafeDatabaseRoleError } from "./errors";
+export { recordAudit, type AuditEntry } from "./repositories/audit";
+export {
+  deactivateUser,
+  upsertUser,
+  type UserChange,
+  type UserIdentity,
+} from "./repositories/users";
 export {
   createIntegration,
   decryptIntegrationCredentials,

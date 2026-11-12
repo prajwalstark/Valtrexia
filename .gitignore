@@ -19,3 +19,6 @@ next-env.d.ts
 
 # Generated Prisma client
 packages/db/src/generated/
+
+# Clerk keyless-mode state
+.clerk/

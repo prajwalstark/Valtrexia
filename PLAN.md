@@ -251,6 +251,11 @@ Changes made during the build:
 - **`normalizeStatus(raw)` takes a result's raw vendor payload.** A status often depends on more than one field (for Datto: the backup outcome and screenshot verification), so the sync job passes each result's `rawPayload` to the connector.
 - **`Asset` gained `lastResultStatus`** (third migration). `currentStatus` can be `missed`, which is derived and hides what the vendor last reported.
 - **The first sync reaches back 14 days**; the mock vendor keeps 30 days of history.
+- **MFA is enforced twice.** Clerk's own session tasks (`setup-mfa`, `choose-organization`) are wired to `/mfa-required` and `/onboarding`, and the app independently refuses any session without a second factor. Clerk's API was read from the installed v7 package (Core 3), which differs from older documentation.
+- **The webhook is a supplement, not a dependency.** Tenants and users are created at sign-in if missing, so local development needs no public webhook URL.
+- **`organization.deleted` does not delete tenant data.** Removal is left as a deliberate operator action.
+- **The web app loads the repository-root `.env`** from `next.config.ts`, so one file serves web, worker and database tooling.
+- **Building the web app needs `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`.**
 - **Decrypted credentials are wrapped in a `Secret` type** that prints as `[redacted]`. Not in the original plan; it backs up the logger's redaction.
 - **Navigation lists only pages that exist**: Dashboard and Integrations. The plan's route list is unchanged.
 

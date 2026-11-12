@@ -11,6 +11,7 @@
     }
   },
   "include": [
+    "../../packages/db/test/global-setup.ts",
     "next-env.d.ts",
     "**/*.ts",
     "**/*.tsx",
