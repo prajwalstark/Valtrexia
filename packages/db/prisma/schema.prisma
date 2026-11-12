@@ -188,31 +188,34 @@ model VendorClientMapping {
 
 /// Something that is backed up: an agent, a share, a virtual machine.
 model Asset {
-  id                     String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  tenantId               String       @map("tenant_id") @db.Uuid
-  clientId               String       @map("client_id") @db.Uuid
-  integrationId          String       @map("integration_id") @db.Uuid
-  vendorAssetId          String       @map("vendor_asset_id")
+  id                     String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId               String        @map("tenant_id") @db.Uuid
+  clientId               String        @map("client_id") @db.Uuid
+  integrationId          String        @map("integration_id") @db.Uuid
+  vendorAssetId          String        @map("vendor_asset_id")
   name                   String
   /// Vendor's asset kind, lower-cased: agent, share, vm, ...
   type                   String
   /// The appliance or host the asset is protected by, when the vendor has one.
-  deviceName             String?      @map("device_name")
-  expectedFrequencyHours Int          @default(24) @map("expected_frequency_hours")
-  slaHours               Int          @default(72) @map("sla_hours")
-  mutedUntil             DateTime?    @map("muted_until") @db.Timestamptz(3)
-  isPaused               Boolean      @default(false) @map("is_paused")
-  isArchived             Boolean      @default(false) @map("is_archived")
-  firstSeenAt            DateTime     @default(now()) @map("first_seen_at") @db.Timestamptz(3)
-  lastSeenAt             DateTime     @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  deviceName             String?       @map("device_name")
+  expectedFrequencyHours Int           @default(24) @map("expected_frequency_hours")
+  slaHours               Int           @default(72) @map("sla_hours")
+  mutedUntil             DateTime?     @map("muted_until") @db.Timestamptz(3)
+  isPaused               Boolean       @default(false) @map("is_paused")
+  isArchived             Boolean       @default(false) @map("is_archived")
+  firstSeenAt            DateTime      @default(now()) @map("first_seen_at") @db.Timestamptz(3)
+  lastSeenAt             DateTime      @default(now()) @map("last_seen_at") @db.Timestamptz(3)
   // Denormalized from backup_results by the sync job, so the dashboard does
   // not aggregate history on every load.
-  lastResultAt           DateTime?    @map("last_result_at") @db.Timestamptz(3)
+  lastResultAt           DateTime?     @map("last_result_at") @db.Timestamptz(3)
+  /// Status of the most recent result. `currentStatus` is this, unless the
+  /// missed-backup rule overrides it.
+  lastResultStatus       BackupStatus? @map("last_result_status")
   /// When the last completed backup finished. A warning counts as completed.
-  lastSuccessAt          DateTime?    @map("last_success_at") @db.Timestamptz(3)
-  currentStatus          BackupStatus @default(unknown) @map("current_status")
-  createdAt              DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt              DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  lastSuccessAt          DateTime?     @map("last_success_at") @db.Timestamptz(3)
+  currentStatus          BackupStatus  @default(unknown) @map("current_status")
+  createdAt              DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   client        Client         @relation(fields: [tenantId, clientId], references: [tenantId, id], onDelete: Cascade)

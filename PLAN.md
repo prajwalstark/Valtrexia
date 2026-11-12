@@ -246,6 +246,11 @@ Changes made during the build:
 - **Client health has a fourth level, `none`**, for a client with no watched assets. Section 6 listed red, amber and green only.
 - **`Asset.lastSuccessAt` means the last completed backup**, success or warning, because that is what the missed rule measures from.
 - **`packages/core` has two entry points.** `@valtrexia/core` is pure and client-safe; `@valtrexia/core/server` holds the encryption and logging code, which need Node APIs.
+- **The sync pipeline was built in step 5, not step 9.** The seed script needs to load mock data into the database, and that is the sync job. Writing it once, tested, was better than a throwaway seed. Step 9 now adds the scheduler, the queue and the incident engine around it.
+- **The seed script lives in `apps/worker`**, not `packages/db/prisma`, so that `packages/db` does not depend on `packages/connectors`.
+- **`normalizeStatus(raw)` takes a result's raw vendor payload.** A status often depends on more than one field (for Datto: the backup outcome and screenshot verification), so the sync job passes each result's `rawPayload` to the connector.
+- **`Asset` gained `lastResultStatus`** (third migration). `currentStatus` can be `missed`, which is derived and hides what the vendor last reported.
+- **The first sync reaches back 14 days**; the mock vendor keeps 30 days of history.
 - **Decrypted credentials are wrapped in a `Secret` type** that prints as `[redacted]`. Not in the original plan; it backs up the logger's redaction.
 - **Navigation lists only pages that exist**: Dashboard and Integrations. The plan's route list is unchanged.
 

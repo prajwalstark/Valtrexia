@@ -29,13 +29,14 @@ Phase 1 is in progress. See [PLAN.md](./PLAN.md) for the design and the full tas
 
 ```
 apps/
-  worker/         Sync worker (BullMQ). Entry point only, until step 9.
+  worker/         Sync pipeline and seed script. The scheduler and queue arrive in step 9.
   web/            Next.js app: shell, sign-in, onboarding, dashboard, integrations.
 packages/
   core/           Shared logic: brand, vendors, statuses, the missed-backup rule, health roll-up,
                   and (server entry only) credential encryption and the redacting logger.
   db/             Prisma schema, migrations, row-level security, tenant-scoped access.
-  connectors/     Vendor connector interface and implementations. Steps 5 and 8.
+  connectors/     Connector interface, shared HTTP client, and the demo (mock) vendor.
+                  The Datto connector arrives in step 8.
 docker/           Files mounted into the local Postgres container.
 ```
 
@@ -79,19 +80,55 @@ Internal packages are consumed as TypeScript source (`exports` points at `src/in
    pnpm db:migrate
    ```
 
-6. Check that everything is wired up. This runs the database tests too, so Postgres must be up.
+6. Load demo data: 12 clients, about 70 assets and two weeks of backup history from the built-in demo vendor.
+
+   ```bash
+   pnpm db:seed
+   ```
+
+7. Check that everything is wired up. This runs the database tests too, so Postgres must be up.
 
    ```bash
    pnpm check
    ```
 
-7. Start the web app and open http://localhost:3000.
+8. Start the web app and open http://localhost:3000.
 
    ```bash
    pnpm dev
    ```
 
-Sign-in is not connected yet, so the app opens without an account. Seeding is added in a later step; this section grows with it.
+Sign-in is not connected yet, so the app opens without an account and does not show the seeded data yet. The dashboard that displays it arrives in step 10.
+
+## Connectors
+
+Every vendor implements one interface in `packages/connectors`:
+
+```ts
+interface Connector {
+  testConnection(): Promise<void>;
+  listClients(): Promise<VendorClient[]>;
+  listAssets(clientId: string): Promise<VendorAsset[]>;
+  listResults(since: Date): Promise<VendorResult[]>;
+  normalizeStatus(raw: unknown): NormalizedStatus;
+}
+```
+
+It is read-only by construction: there is no method that starts, stops or changes a backup job, and the shared HTTP client (`createHttpClient`) can only issue `GET`. That client also handles retries with exponential backoff and jitter, `429` with `Retry-After`, timeouts and a concurrency limit; refuses any request that would leave the vendor's base URL; and logs paths and status codes but never headers or bodies.
+
+Each result keeps the vendor's own record as `rawPayload`. `normalizeStatus` takes that record and maps it to a normalized status, returning `unknown` for anything it does not recognize.
+
+### Demo vendor
+
+`MockConnector` is a vendor that exists only in code. It produces a realistic fleet and a rolling backup history with no network access or API keys, so the product runs end to end without real credentials. It always has something to show: an asset on a failing streak, one that has gone silent (missed), one failing screenshot verification, one never backed up, one paused, one archived, one reporting a status the connector does not recognize, and one mid-backup.
+
+Its history is a pure function of the seed and the clock, so it is stable: asking twice gives the same jobs, and asking later gives the same jobs plus the new ones.
+
+The demo vendor is available only when `VALTREXIA_ENABLE_MOCK=true`, and never when `NODE_ENV=production`.
+
+### Sync
+
+`syncIntegration` (in `apps/worker`) pulls one integration's clients, assets and results and stores them. It never holds a database transaction open across a network call, writes everything in one transaction so a failed sync leaves the previous state intact, and is safe to run repeatedly. The first sync reaches back 14 days; later ones re-read 24 hours before the previous sync, so a backup that was still running is completed. A failure is recorded on the integration with a message written for a technician, never raw error text.
 
 ## How backup health is decided
 

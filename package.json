@@ -22,7 +22,8 @@
     "infra:up": "docker compose up -d --wait",
     "infra:down": "docker compose down",
     "db:generate": "pnpm --filter @valtrexia/db generate",
-    "db:migrate": "pnpm --filter @valtrexia/db migrate"
+    "db:migrate": "pnpm --filter @valtrexia/db migrate",
+    "db:seed": "pnpm --filter @valtrexia/worker seed"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",

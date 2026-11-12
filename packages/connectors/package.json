@@ -8,5 +8,9 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@valtrexia/core": "workspace:*",
+    "zod": "^4.6.7"
   }
 }

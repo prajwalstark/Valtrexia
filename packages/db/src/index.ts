@@ -13,6 +13,13 @@ export {
 } from "./db";
 export { InvalidTenantIdError, UnsafeDatabaseRoleError } from "./errors";
 export {
+  createIntegration,
+  decryptIntegrationCredentials,
+  integrationSummarySelect,
+  type CreateIntegrationInput,
+  type IntegrationSummary,
+} from "./repositories/integrations";
+export {
   ActorType,
   BackupStatus,
   IncidentType,
