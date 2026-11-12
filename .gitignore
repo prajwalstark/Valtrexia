@@ -13,3 +13,6 @@ coverage/
 
 .DS_Store
 *.log
+
+# Next.js generated types
+next-env.d.ts

@@ -30,9 +30,9 @@ Phase 1 is in progress. See [PLAN.md](./PLAN.md) for the design and the full tas
 ```
 apps/
   worker/         Sync worker (BullMQ). Entry point only, until step 9.
-  web/            Next.js app. Added in step 2.
+  web/            Next.js app: shell, sign-in, onboarding, dashboard, integrations.
 packages/
-  core/           Pure logic with no I/O: brand config now; rules and crypto later.
+  core/           Pure logic with no I/O: brand config and vendor catalog now; rules and crypto later.
   db/             Database client, migrations, tenant-scoped access. Step 3.
   connectors/     Vendor connector interface and implementations. Steps 5 and 8.
 docker/           Files mounted into the local Postgres container.
@@ -78,7 +78,13 @@ Internal packages are consumed as TypeScript source (`exports` points at `src/in
    pnpm check
    ```
 
-Database migrations, seeding and the web app's dev server are added in later steps; this section grows with them.
+6. Start the web app and open http://localhost:3000.
+
+   ```bash
+   pnpm dev
+   ```
+
+Sign-in is not connected yet, so the app opens without an account. Database migrations and seeding are added in later steps; this section grows with them.
 
 ### Local database roles
 
@@ -113,6 +119,9 @@ That deletes all local data.
 ## Conventions
 
 - **Branding lives in one file.** The product name, positioning and tagline are defined in `packages/core/src/brand.ts`. Import `brand` from `@valtrexia/core`; a test fails if any of them is hard-coded elsewhere under `apps/` or `packages/`.
+- **One typeface, self-hosted.** Archivo is bundled in `apps/web/app/fonts` under the SIL Open Font License, so builds make no request to a font service. Headings use its wide setting (`font-wide`).
+- **Status colours mean status.** Red, amber and green are reserved for backup health. The brand colour is iris; design tokens are in `apps/web/app/globals.css`.
+- **UI components follow shadcn/ui.** They live in `apps/web/components/ui`; add more with `pnpm dlx shadcn@latest add <name>` from `apps/web`.
 - **No secrets in the repository.** Only `.env.example` is committed, and it contains local-development placeholders.
 - **Never log credentials or raw vendor payloads.**
 - **Ask before adding a dependency** that is not already in the plan.

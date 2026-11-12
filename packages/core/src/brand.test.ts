@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { brand, brandLine, pageTitle } from "./brand";
+import { brand, brandLine, pageTitle, taglineLines } from "./brand";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
@@ -38,6 +38,11 @@ describe("brand config", () => {
     expect(pageTitle()).toBe(brand.name);
     expect(pageTitle("Dashboard")).toBe(`Dashboard · ${brand.name}`);
     expect(brandLine()).toBe(`${brand.name} — ${brand.positioning}`);
+  });
+
+  it("splits the tagline into one sentence per line", () => {
+    expect(taglineLines()).toEqual(["Every Backup.", "Every Client.", "Always in Sight."]);
+    expect(taglineLines().join(" ")).toBe(brand.tagline);
   });
 
   it("is the only place the display name, positioning or tagline is hard-coded", () => {

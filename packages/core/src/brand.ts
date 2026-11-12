@@ -13,9 +13,11 @@ export const brand = {
     "A centralized command center for MSPs to monitor backup infrastructure across vendors, " +
     "detect failures and missed backups, and keep every protected client asset in sight.",
   logo: {
-    /** Paths are relative to the web app's public directory. */
+    /**
+     * Path relative to the web app's public directory. The wordmark is not an
+     * image: it is the mark set beside `name`, so the name stays in this file.
+     */
     mark: "/brand/logo-mark.svg",
-    wordmark: "/brand/logo-wordmark.svg",
   },
 } as const;
 
@@ -29,4 +31,10 @@ export function pageTitle(page?: string): string {
 /** "<name> — <positioning>", used on auth screens and in metadata. */
 export function brandLine(): string {
   return `${brand.name} — ${brand.positioning}`;
+}
+
+/** The tagline split into its sentences, for setting one per line. */
+export function taglineLines(): string[] {
+  const lines = brand.tagline.match(/[^.]+\./g)?.map((line) => line.trim());
+  return lines && lines.length > 0 ? lines : [brand.tagline];
 }

@@ -1,0 +1,121 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens. The interface is dark only: a deep console blue that steps
+ * lighter as surfaces come forward, with lines instead of shadows.
+ *
+ * Iris is the brand colour. Red, amber and green are reserved for backup
+ * status and are never used for decoration, so they always mean something.
+ */
+:root {
+  color-scheme: dark;
+
+  --background: oklch(0.195 0.045 264);
+  --surface: oklch(0.23 0.048 264);
+  --surface-raised: oklch(0.275 0.052 264);
+  --line: oklch(0.34 0.05 264);
+  --line-strong: oklch(0.45 0.052 264);
+
+  --foreground: oklch(0.95 0.012 264);
+  --muted-foreground: oklch(0.79 0.035 264);
+  --subtle-foreground: oklch(0.67 0.04 264);
+
+  --iris: oklch(0.74 0.13 286);
+  --iris-bright: oklch(0.83 0.1 286);
+  --iris-dim: oklch(0.4 0.09 286);
+  --iris-foreground: oklch(0.17 0.04 286);
+
+  --status-success: oklch(0.79 0.15 158);
+  --status-warning: oklch(0.83 0.15 82);
+  --status-critical: oklch(0.7 0.19 24);
+  --status-running: oklch(0.78 0.11 232);
+  --status-unknown: oklch(0.66 0.03 264);
+}
+
+@theme inline {
+  --font-sans: var(--font-archivo), ui-sans-serif, system-ui, sans-serif;
+
+  /* shadcn/ui semantic names, mapped onto the tokens above. */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--surface);
+  --color-card-foreground: var(--foreground);
+  --color-popover: var(--surface-raised);
+  --color-popover-foreground: var(--foreground);
+  --color-primary: var(--iris);
+  --color-primary-foreground: var(--iris-foreground);
+  --color-secondary: var(--surface-raised);
+  --color-secondary-foreground: var(--foreground);
+  --color-muted: var(--surface);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--surface-raised);
+  --color-accent-foreground: var(--foreground);
+  --color-destructive: var(--status-critical);
+  --color-border: var(--line);
+  --color-input: var(--line-strong);
+  --color-ring: var(--iris-bright);
+
+  /* Product-specific names. */
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-subtle-foreground: var(--subtle-foreground);
+  --color-iris: var(--iris);
+  --color-iris-bright: var(--iris-bright);
+  --color-iris-dim: var(--iris-dim);
+  --color-status-success: var(--status-success);
+  --color-status-warning: var(--status-warning);
+  --color-status-critical: var(--status-critical);
+  --color-status-running: var(--status-running);
+  --color-status-unknown: var(--status-unknown);
+
+  --radius-sm: 3px;
+  --radius-md: 5px;
+  --radius-lg: 8px;
+
+  --animate-aperture: aperture-turn 180s linear infinite;
+}
+
+@keyframes aperture-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@layer base {
+  * {
+    border-color: var(--line);
+  }
+
+  html {
+    background-color: var(--background);
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-feature-settings: "tnum" 0;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--iris-bright);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background-color: var(--iris-dim);
+    color: var(--foreground);
+  }
+}
+
+/*
+ * Archivo's width axis does the work a second typeface normally would:
+ * wide letterforms for names and headings, normal width for everything else.
+ */
+@utility font-wide {
+  font-stretch: 125%;
+}

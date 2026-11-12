@@ -234,5 +234,8 @@ Changes made during the build:
 - **TypeScript is pinned to 6.0**, not 7.0. `typescript-eslint` (which `eslint-config-next` depends on) supports TypeScript below 6.1 only.
 - **The brand-name guard is a Vitest test**, not an ESLint rule. It needs no extra dependency and also covers CSS and MDX. Section 3 described it as a lint rule.
 - **ESLint is set up in step 2**, alongside the Next.js app that brings its config.
+- **shadcn/ui components are hand-written** in the standard shadcn layout (`components.json`, `components/ui`, `cn`). The shadcn registry was unreachable from the build session, so the CLI could not fetch them. The CLI works against this layout on a normal machine.
+- **The typeface (Archivo) is self-hosted** with `next/font/local` instead of fetched from Google Fonts, so builds work offline and the app makes no third-party font request.
+- **Navigation lists only pages that exist**: Dashboard and Integrations. The plan's route list is unchanged.
 
 One environment note: Docker's daemon is not running in this cloud session. I will write and document `docker-compose.yml` for your machine, and verify here against the Postgres 16 and Redis 7 already installed in the container. The same tests run against either.
