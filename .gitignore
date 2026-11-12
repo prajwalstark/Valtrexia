@@ -1,0 +1,15 @@
+node_modules/
+.pnpm-store/
+dist/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+
+# Environment files: only the example is committed.
+.env
+.env.*
+!.env.example
+
+.DS_Store
+*.log
