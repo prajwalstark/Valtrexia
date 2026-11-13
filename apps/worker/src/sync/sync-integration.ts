@@ -8,11 +8,14 @@ import {
 } from "@valtrexia/connectors";
 import {
   deriveCurrentStatus,
+  planIncidents,
+  RAISED_INCIDENT_TYPES,
   evaluateMissedBackup,
   isCompletedBackup,
   SYNC_INTERVAL_MINUTES,
   type BackupStatus,
   type MissedBackupVerdict,
+  type RaisedIncidentType,
   type VendorId,
 } from "@valtrexia/core";
 import {
@@ -61,6 +64,8 @@ export interface AssetVerdict {
   assetId: string;
   verdict: MissedBackupVerdict;
   currentStatus: BackupStatus;
+  /** The latest result as the vendor reported it, before the missed rule. */
+  lastResultStatus: BackupStatus | null;
 }
 
 export interface SyncSummary {
@@ -75,6 +80,8 @@ export interface SyncSummary {
   statusCounts: Record<BackupStatus, number>;
   /** The missed-backup verdict for every asset, for the incident engine. */
   verdicts: AssetVerdict[];
+  incidentsOpened: number;
+  incidentsClosed: number;
   since: Date;
 }
 
@@ -375,7 +382,47 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
             });
           }
           statusCounts[currentStatus] += 1;
-          verdicts.push({ assetId: asset.id, verdict, currentStatus });
+          verdicts.push({ assetId: asset.id, verdict, currentStatus, lastResultStatus });
+        }
+
+        // Incidents ...........................................................
+        // In the same transaction as the statuses they follow from, so the two
+        // can never disagree.
+        const openIncidents = await tx.incident.findMany({
+          where: {
+            closedAt: null,
+            type: { in: [...RAISED_INCIDENT_TYPES] },
+            asset: { integrationId },
+          },
+          select: { id: true, assetId: true, type: true },
+        });
+        const openByAsset = new Map<string, Map<RaisedIncidentType, string>>();
+        for (const incident of openIncidents) {
+          const types = openByAsset.get(incident.assetId) ?? new Map<RaisedIncidentType, string>();
+          types.set(incident.type as RaisedIncidentType, incident.id);
+          openByAsset.set(incident.assetId, types);
+        }
+
+        const toOpen: Prisma.IncidentCreateManyInput[] = [];
+        const toClose: string[] = [];
+        for (const entry of verdicts) {
+          const open = openByAsset.get(entry.assetId);
+          const plan = planIncidents({
+            lastResultStatus: entry.lastResultStatus,
+            verdict: entry.verdict,
+            open: new Set(open?.keys() ?? []),
+          });
+          for (const type of plan.open) {
+            toOpen.push({ tenantId, assetId: entry.assetId, type, openedAt: now });
+          }
+          for (const type of plan.close) toClose.push(open!.get(type)!);
+        }
+        if (toOpen.length > 0) await tx.incident.createMany({ data: toOpen });
+        if (toClose.length > 0) {
+          await tx.incident.updateMany({
+            where: { id: { in: toClose }, closedAt: null },
+            data: { closedAt: now },
+          });
         }
 
         await tx.integration.update({
@@ -392,6 +439,8 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
           resultsSkipped,
           statusCounts,
           verdicts,
+          incidentsOpened: toOpen.length,
+          incidentsClosed: toClose.length,
           since,
         } satisfies SyncSummary;
       },
@@ -405,6 +454,8 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
         resultsCreated: summary.resultsCreated,
         resultsUpdated: summary.resultsUpdated,
         resultsSkipped: summary.resultsSkipped,
+        incidentsOpened: summary.incidentsOpened,
+        incidentsClosed: summary.incidentsClosed,
       },
       "sync finished",
     );

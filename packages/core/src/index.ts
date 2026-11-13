@@ -11,6 +11,13 @@ export {
   type HealthAsset,
 } from "./health";
 export {
+  planIncidents,
+  RAISED_INCIDENT_TYPES,
+  type IncidentInput,
+  type IncidentPlan,
+  type RaisedIncidentType,
+} from "./rules/incidents";
+export {
   deriveCurrentStatus,
   evaluateMissedBackup,
   STALE_SYNC_AFTER_INTERVALS,

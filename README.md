@@ -20,8 +20,8 @@ Phase 1 is in progress. See [PLAN.md](./PLAN.md) for the design and the full tas
 | 6    | Clerk auth, MFA enforcement, tenant onboarding               | Done\*  |
 | 7    | Integrations page (Datto credentials, test connection)       | Done\*  |
 | 8    | Datto BCDR connector                                         | Done\*  |
-| 9    | Worker: scheduler, sync job, incidents                       | Next    |
-| 10   | Dashboard and client drill-down                              | Pending |
+| 9    | Worker: scheduler, sync job, incidents                       | Done    |
+| 10   | Dashboard and client drill-down                              | Next    |
 | 11   | 3D fleet constellation with 2D fallback                      | Pending |
 | 12   | Final pass                                                   | Pending |
 
@@ -31,7 +31,7 @@ Phase 1 is in progress. See [PLAN.md](./PLAN.md) for the design and the full tas
 
 ```
 apps/
-  worker/         Sync pipeline and seed script. The scheduler and queue arrive in step 9.
+  worker/         Scheduler, sync queue, sync pipeline, incident engine and seed script.
   web/            Next.js app: shell, sign-in, onboarding, dashboard, integrations.
 packages/
   core/           Shared logic: brand, vendors, statuses, the missed-backup rule, health roll-up,
@@ -88,7 +88,7 @@ Internal packages are consumed as TypeScript source (`exports` points at `src/in
    pnpm db:seed
    ```
 
-7. Check that everything is wired up. This runs the database tests too, so Postgres must be up.
+7. Check that everything is wired up. This runs the database and queue tests too, so Postgres and Redis must be up.
 
    ```bash
    pnpm check
@@ -98,6 +98,12 @@ Internal packages are consumed as TypeScript source (`exports` points at `src/in
 
    ```bash
    pnpm dev
+   ```
+
+9. In a second terminal, start the worker. It syncs every connected vendor every 15 minutes, starting straight away.
+
+   ```bash
+   pnpm worker:dev
    ```
 
 You will be asked to sign in, set up two-step verification and create a workspace. To attach the demo data to your workspace instead of a placeholder one, run the seed with your Clerk organization id: `SEED_CLERK_ORG_ID=org_... pnpm db:seed`. The dashboard that displays it arrives in step 10.
@@ -225,6 +231,44 @@ The demo vendor is available only when `VALTREXIA_ENABLE_MOCK=true`, and never w
 ### Sync
 
 `syncIntegration` (in `apps/worker`) pulls one integration's clients, assets and results and stores them. It never holds a database transaction open across a network call, writes everything in one transaction so a failed sync leaves the previous state intact, and is safe to run repeatedly. The first sync reaches back 14 days; later ones re-read 24 hours before the previous sync, so a backup that was still running is completed. A failure is recorded on the integration with a message written for a technician, never raw error text.
+
+## Worker
+
+`apps/worker` is a long-running process that keeps every integration in sync. It uses BullMQ on Redis.
+
+- **Scheduler tick.** Once a minute (and once at startup) it asks the database which integrations are due: those whose last sync started more than 15 minutes ago, or never. It queues one sync job for each. The database is the source of truth; there is no per-integration schedule in Redis to drift when an integration is added, replaced or removed.
+- **Sync jobs.** A pool runs them, five at a time by default. A job's id is its integration's id, so an integration is never synced twice at once, even with several worker processes.
+- **Failures.** The HTTP layer retries transient vendor errors itself. A sync that still fails is recorded on the integration and tried again when it is next due, 15 minutes later, rather than in a tight loop. One failing integration does not hold up the others.
+- **Several workers.** Any number of worker processes can run. The tick is a single schedule held in Redis, not one per process.
+- **Shutdown.** On `SIGTERM` or `SIGINT` the worker stops taking new jobs, lets running syncs finish, then exits.
+- **Safety at startup.** It refuses to start if connected to Postgres as a privileged role, or with invalid configuration, and says which setting is wrong without printing its value.
+
+Finding what is due is the system's one cross-tenant read. It goes through a SQL function that returns ids only; each sync then runs inside its own tenant. A queued job carries two ids and nothing else: no names, no credentials.
+
+| Setting                  | Default | Meaning                                             |
+| ------------------------ | ------- | --------------------------------------------------- |
+| `SYNC_INTERVAL_MINUTES`  | 15      | How often each integration is synced                |
+| `SYNC_CONCURRENCY`       | 5       | Integrations synced at the same time by one process |
+| `SCHEDULER_TICK_SECONDS` | 60      | How often the scheduler looks for due integrations  |
+| `LOG_LEVEL`              | info    | Worker log verbosity                                |
+
+### Incidents
+
+An incident is a problem with one asset that stays open until it resolves, so a technician sees one item per problem rather than one per failed attempt. Incidents are opened and closed inside the same transaction as the statuses they follow from, by `planIncidents` in `packages/core`.
+
+| Type     | Opens when                                 | Closes when                             |
+| -------- | ------------------------------------------ | --------------------------------------- |
+| `failed` | The latest result failed                   | A backup completes (success or warning) |
+| `missed` | The missed-backup rule says one was missed | A backup is back inside its window      |
+| either   |                                            | The asset is archived, paused or muted  |
+
+- A `failed` incident stays open while a retry is running or its outcome is unreadable.
+- A failed sync opens and closes nothing: with the vendor unreachable, neither a missed backup nor a recovery can be known.
+- An asset whose backups fail for days has both: the latest attempt failed, and none completed in time.
+- At most one incident of each type is open per asset, enforced by a database index.
+- Who acknowledged an incident is kept after it closes. A new failure after a closure is a new incident.
+
+Incidents are in-app only in Phase 1. Sending them anywhere (email, a PSA) is not built.
 
 ## How backup health is decided
 

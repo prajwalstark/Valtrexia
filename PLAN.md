@@ -263,6 +263,12 @@ Changes made during the build:
 - **The Datto connector accepts more than one shape where the real one is unknown**: a bare array or a paged wrapper for lists, seconds, milliseconds or ISO for timestamps, and several spellings for each status. A wrong guess then degrades one record to `unknown` instead of failing a sync. The full list of unverified assumptions is in README.md under "Datto BCDR".
 - **A Datto device with no client name and no organization becomes a client of its own**, named after the device, so nothing is silently dropped.
 - **Datto results have `endedAt` equal to `startedAt`.** Datto reports the moment of a snapshot, not a duration.
+- **A failed sync is not retried by the queue.** Section 6 said it "retries with backoff". The HTTP layer already retries transient vendor errors; a sync that still fails is recorded and tried again when it is next due, 15 minutes later. Retrying the whole sync immediately would repeat the same vendor calls against a vendor that just refused them.
+- **Sync job ids are `sync-<integrationId>`**, not a separate "deterministic id" scheme, and finished jobs are removed from Redis so the id is free for the next sync. The outcome that matters lives on the integration row.
+- **The first scheduler tick runs at startup**, so a new worker begins syncing without waiting a minute.
+- **`failed` incidents follow the latest result; `missed` incidents follow the missed-backup verdict.** They are independent, and both close when an asset is archived, paused or muted. The rules are a pure function, `planIncidents`.
+- **`ioredis` is a direct dependency.** BullMQ 6 made its Redis client an optional peer; section 8 listed it as coming with BullMQ.
+- **The worker's start script runs a single Node process**, so a `SIGTERM` from an orchestrator reaches the worker itself.
 - **Decrypted credentials are wrapped in a `Secret` type** that prints as `[redacted]`. Not in the original plan; it backs up the logger's redaction.
 - **Navigation lists only pages that exist**: Dashboard and Integrations. The plan's route list is unchanged.
 
