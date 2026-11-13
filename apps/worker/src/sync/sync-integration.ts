@@ -41,6 +41,8 @@ export interface SyncDeps {
   allowMock: boolean;
   now?: () => Date;
   fetch?: typeof fetch;
+  /** Overrides Datto's API root. From server configuration only, never a request. */
+  dattoBaseUrl?: string;
   syncIntervalMinutes?: number;
   /** Replaces the connector registry. For tests. */
   connectorFactory?: (
@@ -135,6 +137,7 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
       logger: log,
       now: () => now,
       ...(deps.fetch ? { fetch: deps.fetch } : {}),
+      ...(deps.dattoBaseUrl ? { dattoBaseUrl: deps.dattoBaseUrl } : {}),
     };
     const connector = (deps.connectorFactory ?? createConnector)(
       started.integration.vendor,

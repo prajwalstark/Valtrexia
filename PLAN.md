@@ -260,6 +260,9 @@ Changes made during the build:
 - **Saving requires a passing connection test.** Keys Datto rejects, or cannot be reached to check, are not stored.
 - **Replace keys and Disconnect were added** to the integrations page. The plan's scope line listed only adding credentials and testing; the approved decision 6 said owners add, replace and delete.
 - **The connection-test rate limit is in memory**, per web instance. Section 6 did not specify where it lives. Redis is the place for it if a tighter bound is needed.
+- **The Datto connector accepts more than one shape where the real one is unknown**: a bare array or a paged wrapper for lists, seconds, milliseconds or ISO for timestamps, and several spellings for each status. A wrong guess then degrades one record to `unknown` instead of failing a sync. The full list of unverified assumptions is in README.md under "Datto BCDR".
+- **A Datto device with no client name and no organization becomes a client of its own**, named after the device, so nothing is silently dropped.
+- **Datto results have `endedAt` equal to `startedAt`.** Datto reports the moment of a snapshot, not a duration.
 - **Decrypted credentials are wrapped in a `Secret` type** that prints as `[redacted]`. Not in the original plan; it backs up the logger's redaction.
 - **Navigation lists only pages that exist**: Dashboard and Integrations. The plan's route list is unchanged.
 

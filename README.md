@@ -13,17 +13,19 @@ Phase 1 is in progress. See [PLAN.md](./PLAN.md) for the design and the full tas
 | Step | What                                                         | State   |
 | ---- | ------------------------------------------------------------ | ------- |
 | 1    | Monorepo scaffold, Docker Compose, env example, brand config | Done    |
-| 2    | App shell: theme, navigation, branded sign-in and onboarding | Next    |
-| 3    | Schema, migrations, row-level security                       | Pending |
-| 4    | Core: status types, missed-backup rule, envelope encryption  | Pending |
-| 5    | Connector interface, mock connector, seed script             | Pending |
-| 6    | Clerk auth, MFA enforcement, tenant onboarding               | Pending |
-| 7    | Integrations page (Datto credentials, test connection)       | Pending |
-| 8    | Datto BCDR connector                                         | Pending |
-| 9    | Worker: scheduler, sync job, incidents                       | Pending |
+| 2    | App shell: theme, navigation, branded sign-in and onboarding | Done    |
+| 3    | Schema, migrations, row-level security                       | Done    |
+| 4    | Core: status types, missed-backup rule, envelope encryption  | Done    |
+| 5    | Connector interface, mock connector, seed script             | Done    |
+| 6    | Clerk auth, MFA enforcement, tenant onboarding               | Done\*  |
+| 7    | Integrations page (Datto credentials, test connection)       | Done\*  |
+| 8    | Datto BCDR connector                                         | Done\*  |
+| 9    | Worker: scheduler, sync job, incidents                       | Next    |
 | 10   | Dashboard and client drill-down                              | Pending |
 | 11   | 3D fleet constellation with 2D fallback                      | Pending |
 | 12   | Final pass                                                   | Pending |
+
+\* Built and tested without a live Clerk instance or real Datto keys. Sign-in, MFA setup and webhook delivery have not been exercised end to end, and the Datto connector has only been run against a stand-in built from an assumed response shape. See [Authentication](#authentication) and [Datto BCDR](#datto-bcdr).
 
 ## Repository layout
 
@@ -35,8 +37,8 @@ packages/
   core/           Shared logic: brand, vendors, statuses, the missed-backup rule, health roll-up,
                   and (server entry only) credential encryption and the redacting logger.
   db/             Prisma schema, migrations, row-level security, tenant-scoped access.
-  connectors/     Connector interface, shared HTTP client, and the demo (mock) vendor.
-                  The Datto connector arrives in step 8.
+  connectors/     Connector interface, shared HTTP client, the Datto BCDR connector,
+                  and the demo (mock) vendor.
 docker/           Files mounted into the local Postgres container.
 ```
 
@@ -173,6 +175,45 @@ It is read-only by construction: there is no method that starts, stops or change
 
 Each result keeps the vendor's own record as `rawPayload`. `normalizeStatus` takes that record and maps it to a normalized status, returning `unknown` for anything it does not recognize.
 
+### Datto BCDR
+
+Datto has no "results since" endpoint. Backups are listed inside each asset, and assets inside each device, so the connector reads two endpoints and derives everything from them:
+
+| Interface method | Datto request                                                     |
+| ---------------- | ----------------------------------------------------------------- |
+| `testConnection` | `GET bcdr/device?_page=1&_perPage=1`                              |
+| `listClients`    | `GET bcdr/device` (all pages); one client per distinct customer   |
+| `listAssets`     | `GET bcdr/device/{serial}/asset` for each of the client's devices |
+| `listResults`    | the `backups[]` array inside each asset, filtered by time         |
+
+One connector instance serves one sync and fetches each device's assets once, however the methods are called. Requests are `GET` only, at most two at a time, authenticated with HTTP Basic (public key, secret key).
+
+**Status mapping** (`normalizeDattoStatus`):
+
+| Datto says                                                | Normalized |
+| --------------------------------------------------------- | ---------- |
+| Backup failed                                             | `failed`   |
+| Backup succeeded; screenshot or local verification failed | `warning`  |
+| Backup succeeded; verification passed or not attempted    | `success`  |
+| Backup in progress                                        | `running`  |
+| Anything else                                             | `unknown`  |
+
+**Failure handling.** A device that disappears between listing and fetching (404) is skipped. Any other failure fetching a device's assets fails the whole sync: carrying on would report success with stale data for that device, and its assets would then be flagged as missed. Individual devices, assets or backup entries that cannot be read are skipped and counted in the log.
+
+**Unverified assumptions.** The connector was written without access to a live Datto account, from Datto's published API description as best recalled. Its tests run against a stand-in that serves the _assumed_ response shape, so they prove the connector is consistent with the assumptions, not that the assumptions are right. Check these against real responses before relying on it:
+
+1. The device list is wrapped as `{ pagination, items }`, and `_page` / `_perPage` work.
+2. Which device field names the MSP's customer. The connector prefers `clientCompanyName`, then `organizationId` / `organizationName`, then treats an unassigned device as its own client.
+3. Whether the asset list is a bare array or paged. Both are accepted.
+4. That an asset's `volume` is a stable key. The asset name is the fallback.
+5. The nesting inside `backups[]` (`backup`, `localVerification`, `advancedVerification.screenshotVerification`) and the status strings each uses. Several spellings are accepted for each outcome.
+6. That `timestamp` is epoch seconds. Milliseconds and ISO strings are also accepted.
+7. Whether failed or in-progress attempts are listed at all, or only snapshots that exist. If only successes are listed, a failure will show up as a missed backup rather than a failed one.
+8. Datto's rate limits. The client honours `429` and `Retry-After` and keeps to two concurrent requests.
+9. Whether the API exposes each asset's backup schedule. It is assumed not to, so every Datto asset starts with an expected frequency of 24 hours.
+
+Everything that knows Datto's field names is in `packages/connectors/src/datto/schema.ts`, `normalize.ts` and the `clientOf` function in `connector.ts`. Correcting an assumption means editing those and the fixtures in `fixtures.ts`.
+
 ### Demo vendor
 
 `MockConnector` is a vendor that exists only in code. It produces a realistic fleet and a rolling backup history with no network access or API keys, so the product runs end to end without real credentials. It always has something to show: an asset on a failing streak, one that has gone silent (missed), one failing screenshot verification, one never backed up, one paused, one archived, one reporting a status the connector does not recognize, and one mid-backup.
@@ -260,16 +301,24 @@ The owner role needs `CREATEDB` to run the database tests, which build and drop 
 
 ## Commands
 
-| Command           | What it does                                |
-| ----------------- | ------------------------------------------- |
-| `pnpm typecheck`  | Type-checks every package                   |
-| `pnpm test`       | Runs the Vitest suite once                  |
-| `pnpm test:watch` | Runs Vitest in watch mode                   |
-| `pnpm format`     | Formats the repository with Prettier        |
-| `pnpm check`      | Type check, tests and format check together |
-| `pnpm infra:up`   | Starts local Postgres and Redis             |
-| `pnpm infra:down` | Stops them (data is kept)                   |
-| `pnpm worker:dev` | Runs the worker with reload                 |
+| Command            | What it does                                      |
+| ------------------ | ------------------------------------------------- |
+| `pnpm dev`         | Runs the web app with reload                      |
+| `pnpm build`       | Production build of the web app                   |
+| `pnpm worker:dev`  | Runs the worker with reload                       |
+| `pnpm typecheck`   | Type-checks every package                         |
+| `pnpm lint`        | Lints the repository with ESLint                  |
+| `pnpm test`        | Runs every test once (needs Postgres)             |
+| `pnpm test:unit`   | Runs only the tests that need no services         |
+| `pnpm test:db`     | Runs only the database tests                      |
+| `pnpm test:watch`  | Runs Vitest in watch mode                         |
+| `pnpm format`      | Formats the repository with Prettier              |
+| `pnpm check`       | Type check, lint, tests and format check together |
+| `pnpm infra:up`    | Starts local Postgres and Redis                   |
+| `pnpm infra:down`  | Stops them (data is kept)                         |
+| `pnpm db:migrate`  | Applies pending migrations as the owner role      |
+| `pnpm db:generate` | Regenerates the Prisma client                     |
+| `pnpm db:seed`     | Loads demo data through the real sync pipeline    |
 
 ## Conventions
 

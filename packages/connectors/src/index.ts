@@ -1,5 +1,11 @@
 export { DATTO_DEFAULT_BASE_URL } from "./datto/client";
-export { DattoConnector } from "./datto/connector";
+export { clientOf as dattoClientOf, DattoConnector } from "./datto/connector";
+export {
+  dattoMessage,
+  normalizeDattoStatus,
+  screenshotOutcome,
+  verificationOutcome,
+} from "./datto/normalize";
 export {
   dattoCredentialHint,
   dattoCredentialsSchema,

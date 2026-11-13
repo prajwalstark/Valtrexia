@@ -4,7 +4,6 @@ import { createLogger, Secret } from "@valtrexia/core/server";
 import { describe, expect, it } from "vitest";
 import {
   AuthError,
-  ConnectorUnavailableError,
   InvalidCredentialsShapeError,
   NetworkError,
   RateLimitError,
@@ -211,14 +210,5 @@ describe("datto connector: through the registry", () => {
       dattoBaseUrl: "https://datto-sandbox.example.test/v1",
     }).testConnection();
     expect(calls[0]!.url).toContain("datto-sandbox.example.test");
-  });
-
-  it("says plainly that data sync is not available yet", async () => {
-    const connector = createConnector("datto_bcdr", new Secret(credentials), { allowMock: false });
-    await expect(connector.listClients()).rejects.toBeInstanceOf(ConnectorUnavailableError);
-    await expect(connector.listAssets("x")).rejects.toBeInstanceOf(ConnectorUnavailableError);
-    await expect(connector.listResults(new Date())).rejects.toBeInstanceOf(
-      ConnectorUnavailableError,
-    );
   });
 });
