@@ -1,0 +1,17 @@
+{
+  "name": "@valtrexia/connectors",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./datto/fixtures": "./src/datto/fixtures.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@valtrexia/core": "workspace:*",
+    "zod": "^4.6.7"
+  }
+}

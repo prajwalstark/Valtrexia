@@ -1,9 +1,9 @@
 # Valtrexia — Phase 1 Plan
 
-> Unified Backup Intelligence — *Every Backup. Every Client. Always in Sight.*
+> Unified Backup Intelligence — _Every Backup. Every Client. Always in Sight._
 
-Status: **awaiting approval. No code has been written.**
-Section 9 lists the decisions I need from you before starting.
+Status: **Phase 1 built.** All twelve steps are done. README.md lists what has and has not been verified, and SECURITY.md lists what is still open.
+Section 9 records the decisions taken at approval.
 
 ---
 
@@ -23,11 +23,11 @@ As you specified, at current stable versions: Next.js 16 (App Router), React 19,
 
 Three choices to flag:
 
-| Choice | Decision | Why |
-|---|---|---|
-| ORM | **Prisma** | Listed first in your brief and matches the model you described. RLS policies, roles and functions go in hand-written SQL migrations, which Prisma supports. I will pin the latest stable release (not the 8.0 RC currently tagged on npm) and tell you the version. |
-| Datto client | **Own thin client, not `@wyre-technology/node-datto-bcdr`** | That package is not on the public npm registry (404 when I checked), so it would need a private registry and token. The connector needs its own pagination, backoff and 429 handling anyway, and the Datto surface we use is four GET endpoints. |
-| Monorepo tooling | Plain `pnpm -r` scripts, no Turborepo | Five packages do not need a build orchestrator yet. |
+| Choice           | Decision                                                    | Why                                                                                                                                                                                                                                                                 |
+| ---------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ORM              | **Prisma**                                                  | Listed first in your brief and matches the model you described. RLS policies, roles and functions go in hand-written SQL migrations, which Prisma supports. I will pin the latest stable release (not the 8.0 RC currently tagged on npm) and tell you the version. |
+| Datto client     | **Own thin client, not `@wyre-technology/node-datto-bcdr`** | That package is not on the public npm registry (404 when I checked), so it would need a private registry and token. The connector needs its own pagination, backoff and 429 handling anyway, and the Datto surface we use is four GET endpoints.                    |
+| Monorepo tooling | Plain `pnpm -r` scripts, no Turborepo                       | Five packages do not need a build orchestrator yet.                                                                                                                                                                                                                 |
 
 ---
 
@@ -68,7 +68,7 @@ valtrexia/
 │              mock/  (connector, deterministic fixtures)
 ```
 
-`packages/core/src/brand.ts` is the single source for the name, positioning, tagline, and logo reference. A lint rule (`no-restricted-syntax` on the literal "Valtrexia") fails the build if the name is hard-coded anywhere else in source.
+`packages/core/src/brand.ts` is the single source for the name, positioning, tagline, and logo reference. A test (`brand.test.ts`) scans `apps/` and `packages/` and fails if any of them is hard-coded anywhere else in source.
 
 ---
 
@@ -76,17 +76,17 @@ valtrexia/
 
 All tables have `id uuid`, `createdAt`, `updatedAt`. Every table except `Tenant` carries `tenantId`.
 
-| Model | Fields (beyond the above) | Notes |
-|---|---|---|
-| **Tenant** | clerkOrgId (unique), name, graceHours (default 2) | One per Clerk organization |
-| **User** | tenantId, clerkUserId, email, name, role (`owner`\|`technician`) | One row per membership; unique (tenantId, clerkUserId) |
-| **Integration** | tenantId, vendor, name, credentialsEnc (jsonb), credentialHint, lastSyncAt, lastSyncStartedAt, syncStatus, lastSyncError | `credentialHint` = last 4 chars of the public key, the only credential-derived value the browser ever sees |
-| **Client** | tenantId, name | Unique (tenantId, name) |
-| **VendorClientMapping** | tenantId, integrationId, clientId, vendorClientId, vendorClientName | Unique (integrationId, vendorClientId). Lets several vendors map onto one Client |
-| **Asset** | tenantId, clientId, integrationId, vendorAssetId, name, type, deviceName, expectedFrequencyHours (24), slaHours (72), mutedUntil, isPaused, isArchived, firstSeenAt, lastSeenAt, *lastResultAt, lastSuccessAt, currentStatus* | Unique (integrationId, vendorAssetId) |
-| **BackupResult** | tenantId, assetId, integrationId, vendorResultId, startedAt, endedAt, status, vendorStatusRaw, message, screenshotVerified (nullable), rawPayload (jsonb) | Unique (assetId, vendorResultId) makes sync idempotent. Index (tenantId, assetId, startedAt desc) |
-| **Incident** | tenantId, assetId, type, openedAt, closedAt, acknowledgedBy, acknowledgedAt | Partial unique index (assetId, type) where closedAt is null: one open incident per asset per type |
-| **AuditLog** | tenantId, actorUserId, actorType (`user`\|`system`), action, targetType, targetId, metadata (jsonb), ip | Append-only: the app role gets INSERT and SELECT only |
+| Model                   | Fields (beyond the above)                                                                                                                                                                                                     | Notes                                                                                                      |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| **Tenant**              | clerkOrgId (unique), name, graceHours (default 2)                                                                                                                                                                             | One per Clerk organization                                                                                 |
+| **User**                | tenantId, clerkUserId, email, name, role (`owner`\|`technician`)                                                                                                                                                              | One row per membership; unique (tenantId, clerkUserId)                                                     |
+| **Integration**         | tenantId, vendor, name, credentialsEnc (jsonb), credentialHint, lastSyncAt, lastSyncStartedAt, syncStatus, lastSyncError                                                                                                      | `credentialHint` = last 4 chars of the public key, the only credential-derived value the browser ever sees |
+| **Client**              | tenantId, name                                                                                                                                                                                                                | Unique (tenantId, name)                                                                                    |
+| **VendorClientMapping** | tenantId, integrationId, clientId, vendorClientId, vendorClientName                                                                                                                                                           | Unique (integrationId, vendorClientId). Lets several vendors map onto one Client                           |
+| **Asset**               | tenantId, clientId, integrationId, vendorAssetId, name, type, deviceName, expectedFrequencyHours (24), slaHours (72), mutedUntil, isPaused, isArchived, firstSeenAt, lastSeenAt, _lastResultAt, lastSuccessAt, currentStatus_ | Unique (integrationId, vendorAssetId)                                                                      |
+| **BackupResult**        | tenantId, assetId, integrationId, vendorResultId, startedAt, endedAt, status, vendorStatusRaw, message, screenshotVerified (nullable), rawPayload (jsonb)                                                                     | Unique (assetId, vendorResultId) makes sync idempotent. Index (tenantId, assetId, startedAt desc)          |
+| **Incident**            | tenantId, assetId, type, openedAt, closedAt, acknowledgedBy, acknowledgedAt                                                                                                                                                   | Partial unique index (assetId, type) where closedAt is null: one open incident per asset per type          |
+| **AuditLog**            | tenantId, actorUserId, actorType (`user`\|`system`), action, targetType, targetId, metadata (jsonb), ip                                                                                                                       | Append-only: the app role gets INSERT and SELECT only                                                      |
 
 Enums: `Vendor` = datto_bcdr \| kaseya_uniview \| veeam_vspc \| mock · `BackupStatus` = success \| warning \| failed \| missed \| running \| unknown · `SyncStatus` = never \| running \| ok \| error · `IncidentType` = failed \| missed \| stale (reserved for the SLA rule).
 
@@ -113,6 +113,7 @@ Layered, so that one application bug does not leak data:
 ## 6. Key designs
 
 ### Credentials (envelope encryption)
+
 - A fresh 256-bit data key per integration encrypts the credentials JSON with AES-256-GCM. The data key is wrapped by a key-encryption key and stored beside the ciphertext: `{v, keyId, wrappedDek, iv, ciphertext, tag}`.
 - `tenantId` and `integrationId` are bound in as additional authenticated data, so a ciphertext copied to another tenant's row will not decrypt.
 - `KeyProvider` interface with two implementations: `LocalKeyProvider` (key from `VALTREXIA_LOCAL_KEK`, dev only, refuses to start when `NODE_ENV=production`) and a KMS provider for prod (see question 4).
@@ -120,19 +121,22 @@ Layered, so that one application bug does not leak data:
 - The logger redacts by key name (`secret`, `password`, `authorization`, `credentials`, `rawPayload`) and never logs request headers.
 
 ### Connector interface (`packages/connectors`)
+
 Exactly the five methods you specified. Connectors are built by `createConnector(vendor, credentials, { fetch, logger })`, with `fetch` injectable for tests. A shared `http.ts` provides pagination helpers, retries with exponential backoff and jitter on 5xx and network errors, `Retry-After` handling on 429, a per-integration concurrency cap, and typed errors (`AuthError`, `RateLimitError`, `VendorError`) so the UI can say "bad credentials" rather than "sync failed".
 
 ### Datto BCDR mapping
-| Interface method | Datto call |
-|---|---|
-| testConnection | `GET /bcdr/device?_perPage=1`, 401/403 becomes `AuthError` |
-| listClients | Distinct organizations across `GET /bcdr/device` (paged) |
-| listAssets | `GET /bcdr/device/{serial}/asset` for each of the client's devices |
+
+| Interface method   | Datto call                                                          |
+| ------------------ | ------------------------------------------------------------------- |
+| testConnection     | `GET /bcdr/device?_perPage=1`, 401/403 becomes `AuthError`          |
+| listClients        | Distinct organizations across `GET /bcdr/device` (paged)            |
+| listAssets         | `GET /bcdr/device/{serial}/asset` for each of the client's devices  |
 | listResults(since) | The `backups[]` array embedded in each asset, filtered by timestamp |
 
 Auth is HTTP Basic (public key : secret key). Status rule: backup failed → `failed`; backup succeeded but screenshot or local verification failed → `warning`; succeeded and verification passed or not attempted → `success`; anything unrecognized → `unknown` with the raw value kept in `vendorStatusRaw`.
 
 **Uncertain until I see a real response, all isolated in `datto/`:**
+
 - Exact field names in the asset payload (`backups[].backup.status`, `advancedVerification.screenshotVerification`, `lastSnapshot`), and whether timestamps are epoch seconds.
 - Which device field identifies the client organization.
 - Datto's published rate limit. I will be conservative and honor 429.
@@ -142,23 +146,28 @@ Auth is HTTP Basic (public key : secret key). Status rule: backup failed → `fa
 The connector is built and tested against recorded-shape fixtures; I will flag every assumption in code comments and reconcile them when you provide keys.
 
 ### Mock connector
+
 Deterministic (seeded by integration id): about 12 clients, 60 assets, 14 days of results, with scripted scenarios: a failing streak, a missed backup, a screenshot failure, a never-backed-up asset, a paused agent. Enabled only when `VALTREXIA_ENABLE_MOCK=true`. Used by the seed script, the onboarding "Explore with demo data" option, and tests.
 
 ### Worker
+
 - One repeating BullMQ `scheduler-tick` job (every 60 s) calls `list_due_integrations('15 minutes')` and enqueues `sync-integration` with a deterministic job id, so an integration is never synced twice concurrently. The database is the source of truth; there are no per-integration schedules to drift.
 - `sync-integration`, inside `withTenant`: decrypt → `listClients` → upsert clients and mappings → `listAssets` → upsert assets → `listResults(lastSyncAt − 24 h overlap; 14 days on first sync)` → normalize → upsert results → recompute asset status → run rules → open/close incidents → update `lastSyncAt` / `syncStatus`.
 - A failed sync records a sanitized error on the integration and retries with backoff.
 
 ### Missed-backup rule (pure function in `packages/core`)
+
 An asset is **missed** when `now − (lastSuccessAt ?? firstSeenAt) > expectedFrequencyHours + graceHours`.
 Skipped when the asset is muted, paused or archived, **or when its integration's last sync failed or is itself overdue**: if we could not reach the vendor we do not know that the backup was missed, and the integration shows a sync error instead. The incident closes automatically on the next qualifying backup.
 
 ### Dashboard
+
 - Client health roll-up: **red** = any unmuted asset failed or missed; **amber** = any warning or unknown, or the integration's sync is failing; **green** = everything else. Sorted by severity, then number of affected assets, then name.
 - Drill-down: asset table with a 14-day strip per asset (one cell per day, worst status of that day), expandable to individual results with message, raw vendor status and screenshot verification.
 - Status is never conveyed by color alone: every indicator has an icon and a text label.
 
 ### 3D visualization
+
 One scene in Phase 1: a **fleet constellation** at the top of the dashboard. Each client is a node colored and pulsed by health, with its assets orbiting; clicking a node opens the drill-down. Loaded with `next/dynamic` (`ssr: false`), so Three.js is never in the initial bundle. The 2D fallback (a status tile grid) renders instead when the user prefers reduced motion, WebGL2 is unavailable, the device reports low cores or memory, or the user switches it off (remembered). The ranked client list below it is always present, so the 3D view is never the only way to reach information.
 
 ---
@@ -167,20 +176,20 @@ One scene in Phase 1: a **fleet constellation** at the top of the dashboard. Eac
 
 Each step ends with `pnpm typecheck && pnpm test` and a short report of what changed.
 
-| # | Step | Verified by |
-|---|---|---|
-| 1 | Monorepo scaffold, Docker Compose (Postgres 16, Redis 7), `.env.example`, README, brand config | Install, typecheck, empty test run |
-| 2 | App shell: dark command-center theme, navigation, logo placeholder, static sign-in and onboarding screens | Typecheck, build, screenshots |
-| 3 | Schema, migrations, roles, RLS policies, definer functions, `withTenant` | **Tenant isolation tests** against real Postgres |
-| 4 | Core: status types, missed-backup rule, health roll-up, envelope encryption, redacting logger | **Missed-rule tests**, crypto round-trip and tamper tests |
-| 5 | Connector interface, HTTP layer, mock connector, seed script | Pagination / backoff / 429 tests, seed runs |
-| 6 | Clerk auth, MFA enforcement, org → tenant provisioning, webhook, onboarding flow, audit log | Typecheck, tests; live sign-in needs your Clerk keys |
-| 7 | Integrations page: Datto credential form, "Test connection", encrypted storage | Action tests: secret never in any response |
-| 8 | Datto BCDR connector and normalizer | **Normalizer tests** on fixtures, GET-only assertion |
-| 9 | Worker: scheduler, sync job, incident engine | Sync integration test with mock connector on real Postgres + Redis |
-| 10 | Dashboard and client drill-down | Typecheck, tests, screenshots on seeded data |
-| 11 | 3D constellation and 2D fallback | Screenshots of both modes, bundle check that Three.js is lazy |
-| 12 | Final pass: README, full test run, security checklist | Everything green |
+| #   | Step                                                                                                      | Verified by                                                        |
+| --- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| 1   | Monorepo scaffold, Docker Compose (Postgres 16, Redis 7), `.env.example`, README, brand config            | Install, typecheck, empty test run                                 |
+| 2   | App shell: dark command-center theme, navigation, logo placeholder, static sign-in and onboarding screens | Typecheck, build, screenshots                                      |
+| 3   | Schema, migrations, roles, RLS policies, definer functions, `withTenant`                                  | **Tenant isolation tests** against real Postgres                   |
+| 4   | Core: status types, missed-backup rule, health roll-up, envelope encryption, redacting logger             | **Missed-rule tests**, crypto round-trip and tamper tests          |
+| 5   | Connector interface, HTTP layer, mock connector, seed script                                              | Pagination / backoff / 429 tests, seed runs                        |
+| 6   | Clerk auth, MFA enforcement, org → tenant provisioning, webhook, onboarding flow, audit log               | Typecheck, tests; live sign-in needs your Clerk keys               |
+| 7   | Integrations page: Datto credential form, "Test connection", encrypted storage                            | Action tests: secret never in any response                         |
+| 8   | Datto BCDR connector and normalizer                                                                       | **Normalizer tests** on fixtures, GET-only assertion               |
+| 9   | Worker: scheduler, sync job, incident engine                                                              | Sync integration test with mock connector on real Postgres + Redis |
+| 10  | Dashboard and client drill-down                                                                           | Typecheck, tests, screenshots on seeded data                       |
+| 11  | 3D constellation and 2D fallback                                                                          | Screenshots of both modes, bundle check that Three.js is lazy      |
+| 12  | Final pass: README, full test run, security checklist                                                     | Everything green                                                   |
 
 **Tenant isolation tests (step 3)** cover, for every tenant table: tenant A cannot read, update or delete tenant B's rows; an insert carrying another tenant's id is rejected; no context returns zero rows; the app role is confirmed non-superuser and non-owner; a catalog test fails if any table with a `tenant_id` column lacks forced RLS (so a future table cannot ship unprotected); a composite FK blocks a cross-tenant reference; and a credential ciphertext moved to another tenant fails to decrypt.
 
@@ -190,14 +199,14 @@ Each step ends with `pnpm typecheck && pnpm test` and a short report of what cha
 
 Not in your list. I will not add any of them without a yes.
 
-| Package | Used for | If you say no |
-|---|---|---|
-| `zod` | Validating env vars, form input, and vendor payloads at the connector boundary | Hand-written validators |
-| `tsx` (dev) | Running the worker and seed script in TypeScript during development | Build step before every run |
-| `pino` | Structured logs with built-in redaction | A small logger in `packages/core` |
-| `eslint` + `eslint-config-next`, `prettier` (dev) | Lint (including the brand-name rule) and formatting | No lint; the brand rule becomes a test |
-| `pg` + `@prisma/adapter-pg` | Postgres driver, required by current Prisma | Not optional with Prisma |
-| `server-only` | Build error if server modules (crypto, db) are imported into client code | Convention only |
+| Package                                           | Used for                                                                       | If you say no                          |
+| ------------------------------------------------- | ------------------------------------------------------------------------------ | -------------------------------------- |
+| `zod`                                             | Validating env vars, form input, and vendor payloads at the connector boundary | Hand-written validators                |
+| `tsx` (dev)                                       | Running the worker and seed script in TypeScript during development            | Build step before every run            |
+| `pino`                                            | Structured logs with built-in redaction                                        | A small logger in `packages/core`      |
+| `eslint` + `eslint-config-next`, `prettier` (dev) | Lint (including the brand-name rule) and formatting                            | No lint; the brand rule becomes a test |
+| `pg` + `@prisma/adapter-pg`                       | Postgres driver, required by current Prisma                                    | Not optional with Prisma               |
+| `server-only`                                     | Build error if server modules (crypto, db) are imported into client code       | Convention only                        |
 
 Implied by your stack, listed so nothing is a surprise: shadcn/ui pulls in Radix primitives, `class-variance-authority`, `clsx`, `tailwind-merge` and `lucide-react`; BullMQ brings `ioredis`.
 
@@ -205,15 +214,74 @@ Deferred: a KMS SDK (for example `@aws-sdk/client-kms`), pending question 4.
 
 ---
 
-## 9. Decisions I need from you
+## 9. Decisions
 
-1. **Where does the code live?** This session has no git repository attached and its container is temporary, so nothing persists unless it is pushed. Tell me a GitHub repo (`owner/name`) to attach and I will commit and push after each step. Otherwise I work in `/home/user/valtrexia` with local commits only.
-2. **Dependencies in section 8:** approve all, or name the ones to drop.
-3. **Clerk keys.** I can build and test everything without them, but live sign-in, MFA and the org webhook cannot be exercised until a Clerk dev instance exists with Organizations enabled and MFA set to required. Do you have one? (Do not paste keys in chat; I will tell you where they go at step 6.)
-4. **Which cloud KMS for production?** AWS KMS, GCP KMS or Azure Key Vault. Phase 1 ships the interface and the local dev provider either way; the answer only decides which prod provider I write.
-5. **Does a `warning` count as a completed backup for the missed rule?** Recommended: yes. A Datto backup that succeeded but failed screenshot verification still produced a restore point, so it shows amber, not "missed". Default grace period: 2 hours per tenant.
-6. **Who can manage integrations?** Recommended: owners only (Clerk org admins) add, replace and delete credentials; technicians view everything and acknowledge incidents.
-7. **3D in Phase 1?** Recommended: yes, as step 11, after the core is working. Say so if you would rather defer it to Phase 2.
-8. **Notifications are not in Phase 1.** Your scope list has no delivery channel, so incidents are in-app only. Confirm, or name one channel (email is the smallest) to add.
+Taken at plan approval ("go with your recommendations").
+
+| #   | Question                                                       | Decision                                                                                                                          |
+| --- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Where the code lives                                           | `prajwalstark/Valtrexia`, branch `phase-1`, committed and pushed after each step                                                  |
+| 2   | Dependencies in section 8                                      | All approved                                                                                                                      |
+| 3   | Clerk keys                                                     | **Open.** Needed at step 6 to exercise live sign-in, MFA and the org webhook                                                      |
+| 4   | Production KMS                                                 | **Open.** Phase 1 ships the `KeyProvider` interface and the local dev provider; the answer decides which prod provider is written |
+| 5   | Does `warning` count as a completed backup for the missed rule | Yes. Default grace period is 2 hours per tenant                                                                                   |
+| 6   | Who manages integrations                                       | Owners only (Clerk org admins). Technicians view and acknowledge                                                                  |
+| 7   | 3D in Phase 1                                                  | Yes, as step 11                                                                                                                   |
+| 8   | Notifications                                                  | Not in Phase 1; incidents are in-app only                                                                                         |
+
+Changes made during the build:
+
+- **TypeScript is pinned to 6.0**, not 7.0. `typescript-eslint` (which `eslint-config-next` depends on) supports TypeScript below 6.1 only.
+- **The brand-name guard is a Vitest test**, not an ESLint rule. It needs no extra dependency and also covers CSS and MDX. Section 3 described it as a lint rule.
+- **ESLint is set up in step 2**, alongside the Next.js app that brings its config.
+- **shadcn/ui components are hand-written** in the standard shadcn layout (`components.json`, `components/ui`, `cn`). The shadcn registry was unreachable from the build session, so the CLI could not fetch them. The CLI works against this layout on a normal machine.
+- **The typeface (Archivo) is self-hosted** with `next/font/local` instead of fetched from Google Fonts, so builds work offline and the app makes no third-party font request.
+- **Row-level security is enabled, not forced.** Section 5 said "enabled and forced". `FORCE` only changes behaviour for the table owner, which the app never connects as, and it would stop the three security-definer functions (which run as the owner) from making their cross-tenant lookups unless the owner had `BYPASSRLS`, a superuser-only attribute that managed Postgres does not hand out. In its place, `Db.assertSafeRole()` refuses to run as a superuser, a role with `BYPASSRLS`, or a table owner. That also covers a superuser owner, which `FORCE` would not.
+- **Policies apply to every role**, not only `valtrexia_app`, so any role added later is tenant-scoped by default.
+- **The runtime role's name is fixed** (`valtrexia_app`) because the migrations grant to it by name. Only its password is configurable.
+- **Prisma is pinned to 7.10.1.** The CLI's `latest` tag on npm points at an 8.0 release candidate.
+- **User rows are deactivated, not deleted** (`deactivatedAt`), so audit entries and incident acknowledgements stay attributable.
+- **The "ciphertext moved to another tenant fails to decrypt" test moves to step 4**, where the encryption code is written.
+- **The missed-backup rule returns four verdicts**, not a yes/no: `missed`, `ok`, `suppressed` (archived, paused or muted) and `indeterminate` (sync never ran, is failing, or is more than three intervals old). An indeterminate verdict leaves an open incident untouched.
+- **Client health has a fourth level, `none`**, for a client with no watched assets. Section 6 listed red, amber and green only.
+- **`Asset.lastSuccessAt` means the last completed backup**, success or warning, because that is what the missed rule measures from.
+- **`packages/core` has two entry points.** `@valtrexia/core` is pure and client-safe; `@valtrexia/core/server` holds the encryption and logging code, which need Node APIs.
+- **The sync pipeline was built in step 5, not step 9.** The seed script needs to load mock data into the database, and that is the sync job. Writing it once, tested, was better than a throwaway seed. Step 9 now adds the scheduler, the queue and the incident engine around it.
+- **The seed script lives in `apps/worker`**, not `packages/db/prisma`, so that `packages/db` does not depend on `packages/connectors`.
+- **`normalizeStatus(raw)` takes a result's raw vendor payload.** A status often depends on more than one field (for Datto: the backup outcome and screenshot verification), so the sync job passes each result's `rawPayload` to the connector.
+- **`Asset` gained `lastResultStatus`** (third migration). `currentStatus` can be `missed`, which is derived and hides what the vendor last reported.
+- **The first sync reaches back 14 days**; the mock vendor keeps 30 days of history.
+- **MFA is enforced twice.** Clerk's own session tasks (`setup-mfa`, `choose-organization`) are wired to `/mfa-required` and `/onboarding`, and the app independently refuses any session without a second factor. Clerk's API was read from the installed v7 package (Core 3), which differs from older documentation.
+- **The webhook is a supplement, not a dependency.** Tenants and users are created at sign-in if missing, so local development needs no public webhook URL.
+- **`organization.deleted` does not delete tenant data.** Removal is left as a deliberate operator action.
+- **The web app loads the repository-root `.env`** from `next.config.ts`, so one file serves web, worker and database tooling.
+- **Building the web app needs `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`.**
+- **Datto's connection test was built in step 7**, ahead of the rest of the connector, so that "Test connection" on the integrations page is real. Listing clients, assets and results follows in step 8; until then a Datto integration can be saved but reports that syncing is not available yet.
+- **Saving requires a passing connection test.** Keys Datto rejects, or cannot be reached to check, are not stored.
+- **Replace keys and Disconnect were added** to the integrations page. The plan's scope line listed only adding credentials and testing; the approved decision 6 said owners add, replace and delete.
+- **The connection-test rate limit is in memory**, per web instance. Section 6 did not specify where it lives. Redis is the place for it if a tighter bound is needed.
+- **The Datto connector accepts more than one shape where the real one is unknown**: a bare array or a paged wrapper for lists, seconds, milliseconds or ISO for timestamps, and several spellings for each status. A wrong guess then degrades one record to `unknown` instead of failing a sync. The full list of unverified assumptions is in README.md under "Datto BCDR".
+- **A Datto device with no client name and no organization becomes a client of its own**, named after the device, so nothing is silently dropped.
+- **Datto results have `endedAt` equal to `startedAt`.** Datto reports the moment of a snapshot, not a duration.
+- **A failed sync is not retried by the queue.** Section 6 said it "retries with backoff". The HTTP layer already retries transient vendor errors; a sync that still fails is recorded and tried again when it is next due, 15 minutes later. Retrying the whole sync immediately would repeat the same vendor calls against a vendor that just refused them.
+- **Sync job ids are `sync-<integrationId>`**, not a separate "deterministic id" scheme, and finished jobs are removed from Redis so the id is free for the next sync. The outcome that matters lives on the integration row.
+- **The first scheduler tick runs at startup**, so a new worker begins syncing without waiting a minute.
+- **`failed` incidents follow the latest result; `missed` incidents follow the missed-backup verdict.** They are independent, and both close when an asset is archived, paused or muted. The rules are a pure function, `planIncidents`.
+- **`ioredis` is a direct dependency.** BullMQ 6 made its Redis client an optional peer; section 8 listed it as coming with BullMQ.
+- **The worker's start script runs a single Node process**, so a `SIGTERM` from an orchestrator reaches the worker itself.
+- **The dashboard summary is two thin segmented bars with figures beside them**, not stat tiles: clients by health and assets by status.
+- **The 14-day strip uses UTC days**, and each square shows the day's worst result. A per-workspace time zone is future work.
+- **Incident acknowledgement was added to the client page.** The step's scope line did not list it; approved decision 6 said technicians acknowledge incidents, and without it incidents would be write-only.
+- **Two status colours changed.** "Running" and "unknown" were too close to tell apart in normal vision (ΔE 14.9 against a floor of 15), found by the palette validator. Both were re-stepped.
+- **The constellation sits beside the fleet summary on wide screens**, not across the full width. A circular scene in a very wide stage left most of it empty.
+- **The 2D fallback is a grid of client tiles, each a link**, with one square per asset. Section 6 called it "a status tile grid".
+- **The view choice is remembered in a cookie, not local storage**, so the server can render the right view first and avoid a layout jump.
+- **Reduced motion always wins**, even over an explicit choice of 3D. Section 6 was ambiguous about which takes precedence.
+- **No graphics acceleration was added as a reason to default to 2D.** The scene is slow when WebGL is drawn in software.
+- **Scene labels are plain HTML positioned from the camera**, not drei's `Html` component, which left a label empty under this React version. drei is still used for the drag-to-rotate controls.
+- **Clients are laid out on a sunflower spiral, worst first from the centre**, the same motif as the sign-in screen. The scene is drawn in a handful of batched calls and capped at 120 clients.
+- **Step 12 added four things beyond documentation**: baseline security response headers, an error page that shows no error text, exact (not prefix) public routes in the proxy, and a test that fails if a page or server action omits the session check.
+- **Decrypted credentials are wrapped in a `Secret` type** that prints as `[redacted]`. Not in the original plan; it backs up the logger's redaction.
+- **Navigation lists only pages that exist**: Dashboard and Integrations. The plan's route list is unchanged.
 
 One environment note: Docker's daemon is not running in this cloud session. I will write and document `docker-compose.yml` for your machine, and verify here against the Postgres 16 and Redis 7 already installed in the container. The same tests run against either.
