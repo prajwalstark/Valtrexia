@@ -273,6 +273,13 @@ Changes made during the build:
 - **The 14-day strip uses UTC days**, and each square shows the day's worst result. A per-workspace time zone is future work.
 - **Incident acknowledgement was added to the client page.** The step's scope line did not list it; approved decision 6 said technicians acknowledge incidents, and without it incidents would be write-only.
 - **Two status colours changed.** "Running" and "unknown" were too close to tell apart in normal vision (ΔE 14.9 against a floor of 15), found by the palette validator. Both were re-stepped.
+- **The constellation sits beside the fleet summary on wide screens**, not across the full width. A circular scene in a very wide stage left most of it empty.
+- **The 2D fallback is a grid of client tiles, each a link**, with one square per asset. Section 6 called it "a status tile grid".
+- **The view choice is remembered in a cookie, not local storage**, so the server can render the right view first and avoid a layout jump.
+- **Reduced motion always wins**, even over an explicit choice of 3D. Section 6 was ambiguous about which takes precedence.
+- **No graphics acceleration was added as a reason to default to 2D.** The scene is slow when WebGL is drawn in software.
+- **Scene labels are plain HTML positioned from the camera**, not drei's `Html` component, which left a label empty under this React version. drei is still used for the drag-to-rotate controls.
+- **Clients are laid out on a sunflower spiral, worst first from the centre**, the same motif as the sign-in screen. The scene is drawn in a handful of batched calls and capped at 120 clients.
 - **Decrypted credentials are wrapped in a `Secret` type** that prints as `[redacted]`. Not in the original plan; it backs up the logger's redaction.
 - **Navigation lists only pages that exist**: Dashboard and Integrations. The plan's route list is unchanged.
 

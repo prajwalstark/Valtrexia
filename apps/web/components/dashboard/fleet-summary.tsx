@@ -28,22 +28,26 @@ export function FleetSummary({ overview }: { overview: FleetOverview }) {
   }));
 
   return (
-    <section aria-label="Fleet summary" className="grid gap-x-12 gap-y-8 lg:grid-cols-2">
-      <Split
-        heading={count(overview.clients.length, "client")}
-        label="Clients by health"
-        parts={clientParts}
-      />
-      <Split
-        heading={`${count(overview.assets.watched, "asset")} watched`}
-        note={
-          overview.assets.excluded > 0
-            ? `${overview.assets.excluded} more paused, archived or muted`
-            : undefined
-        }
-        label="Assets by status"
-        parts={assetParts}
-      />
+    // A container query, not a viewport one: the summary sits in a narrow
+    // column beside the 3D stage and at full width under the 2D grid.
+    <section aria-label="Fleet summary" className="@container">
+      <div className="grid gap-x-12 gap-y-8 @3xl:grid-cols-2">
+        <Split
+          heading={count(overview.clients.length, "client")}
+          label="Clients by health"
+          parts={clientParts}
+        />
+        <Split
+          heading={`${count(overview.assets.watched, "asset")} watched`}
+          note={
+            overview.assets.excluded > 0
+              ? `${overview.assets.excluded} more paused, archived or muted`
+              : undefined
+          }
+          label="Assets by status"
+          parts={assetParts}
+        />
+      </div>
     </section>
   );
 }

@@ -1,13 +1,23 @@
 import Link from "next/link";
+import { FleetGrid } from "@/components/fleet/fleet-grid";
+import { FleetView } from "@/components/fleet/fleet-view";
 import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui/notice";
 import type { FleetOverview } from "@/lib/dashboard-core";
+import type { FleetViewMode } from "@/lib/fleet-view";
 import { count } from "@/lib/format";
 import { ClientList } from "./client-list";
 import { FleetSummary } from "./fleet-summary";
 
-export function DashboardView({ overview }: { overview: FleetOverview }) {
+export function DashboardView({
+  overview,
+  fleetViewMode,
+}: {
+  overview: FleetOverview;
+  /** Which fleet view to render first, from the visitor's cookies. */
+  fleetViewMode: FleetViewMode;
+}) {
   const { integrations, clients } = overview;
 
   return (
@@ -56,7 +66,12 @@ export function DashboardView({ overview }: { overview: FleetOverview }) {
       ) : (
         <>
           <div className="mt-10">
-            <FleetSummary overview={overview} />
+            <FleetView
+              clients={clients}
+              initialMode={fleetViewMode}
+              grid={<FleetGrid clients={clients} />}
+              summary={<FleetSummary overview={overview} />}
+            />
           </div>
           <section className="mt-12" aria-labelledby="clients-heading">
             <h2 id="clients-heading" className="mb-4 text-lg font-semibold">

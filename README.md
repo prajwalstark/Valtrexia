@@ -10,20 +10,20 @@ Version 1 is **read-only**. It never starts, stops or changes a backup job.
 
 Phase 1 is in progress. See [PLAN.md](./PLAN.md) for the design and the full task list.
 
-| Step | What                                                         | State   |
-| ---- | ------------------------------------------------------------ | ------- |
-| 1    | Monorepo scaffold, Docker Compose, env example, brand config | Done    |
-| 2    | App shell: theme, navigation, branded sign-in and onboarding | Done    |
-| 3    | Schema, migrations, row-level security                       | Done    |
-| 4    | Core: status types, missed-backup rule, envelope encryption  | Done    |
-| 5    | Connector interface, mock connector, seed script             | Done    |
-| 6    | Clerk auth, MFA enforcement, tenant onboarding               | Done\*  |
-| 7    | Integrations page (Datto credentials, test connection)       | Done\*  |
-| 8    | Datto BCDR connector                                         | Done\*  |
-| 9    | Worker: scheduler, sync job, incidents                       | Done    |
-| 10   | Dashboard and client drill-down                              | Done\*  |
-| 11   | 3D fleet constellation with 2D fallback                      | Next    |
-| 12   | Final pass                                                   | Pending |
+| Step | What                                                         | State  |
+| ---- | ------------------------------------------------------------ | ------ |
+| 1    | Monorepo scaffold, Docker Compose, env example, brand config | Done   |
+| 2    | App shell: theme, navigation, branded sign-in and onboarding | Done   |
+| 3    | Schema, migrations, row-level security                       | Done   |
+| 4    | Core: status types, missed-backup rule, envelope encryption  | Done   |
+| 5    | Connector interface, mock connector, seed script             | Done   |
+| 6    | Clerk auth, MFA enforcement, tenant onboarding               | Done\* |
+| 7    | Integrations page (Datto credentials, test connection)       | Done\* |
+| 8    | Datto BCDR connector                                         | Done\* |
+| 9    | Worker: scheduler, sync job, incidents                       | Done   |
+| 10   | Dashboard and client drill-down                              | Done\* |
+| 11   | 3D fleet constellation with 2D fallback                      | Done\* |
+| 12   | Final pass                                                   | Next   |
 
 \* Built and tested without a live Clerk instance or real Datto keys. Sign-in, MFA setup and webhook delivery have not been exercised end to end, and the Datto connector has only been run against a stand-in built from an assumed response shape. See [Authentication](#authentication) and [Datto BCDR](#datto-bcdr).
 
@@ -146,6 +146,28 @@ The app works without the webhook, since sign-in creates whatever is missing. Th
 **Status strip.** Across the top of every page: how many watched assets have failed, been missed or warned right now, and when data was last synced. If an integration is failing to sync, it says so there.
 
 **Dashboard.** Two thin bars summarize the fleet, clients by health and assets by status, each with its figures written out beside it. Below them is every client, worst first: health, a one-line description of what is wrong ("2 failed, 1 missed of 6 assets"), its assets as a small bar, and its open incident count.
+
+**Fleet view.** At the top of the dashboard the fleet is drawn as a constellation: each sphere is a client, coloured by health and placed worst first from the centre, and the dots circling it are its assets, coloured by status. Clients that need action pulse slightly and are named; hovering any client shows its name and state, and selecting one opens it. A switch beside it changes between the 3D view and a 2D one.
+
+The 2D view is a grid of tiles, one per client, worst first, with one square per asset. It is a complete view in its own right: every tile is a link, so it works with a keyboard and a screen reader, and it is rendered on the server, so it needs no JavaScript.
+
+Which one is shown:
+
+| Situation                                                                                           | View                                           |
+| --------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| The system asks for reduced motion                                                                  | 2D always; the 3D option is disabled, with why |
+| The browser has no WebGL 2                                                                          | 2D always; the 3D option is disabled, with why |
+| The person has chosen a view                                                                        | That view                                      |
+| No choice, and the device has under 4 cores or 4 GB, no graphics acceleration, or asks to save data | 2D, with 3D available to switch on             |
+| Otherwise                                                                                           | 3D                                             |
+
+- The choice is remembered in a cookie (it holds only `3d` or `2d`), so the server renders the right view first and the page does not jump on load.
+- three.js and the scene are loaded only when the 3D view is shown: about 920 KB of JavaScript before compression that the 2D path never fetches.
+- The scene stops rendering while it is scrolled out of view. If WebGL fails or its context is lost, the 2D view takes over and says so.
+- It draws at most 120 clients and 28 assets per client, and says when it is leaving some out; the list below always has everything.
+- The 3D view is an enhancement, never the only way to reach anything: the same clients, in the same order, are in the list directly below.
+
+The decisions (which view, and where each client sits) are pure functions in `apps/web/lib/fleet-view.ts`.
 
 **Client page.** The client's open incidents, then its assets worst first. Each asset shows its status, when it last backed up, and a strip of the last 14 days: one square per UTC day, showing that day's _worst_ result, so one failure is never hidden behind later successes. An empty square is a day with no backup. Opening an asset lists its individual backups with the vendor's own status, screenshot verification and any message. Assets that are archived, paused or muted are listed last and dimmed.
 
