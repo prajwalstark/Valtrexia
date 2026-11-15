@@ -8,24 +8,31 @@ Version 1 is **read-only**. It never starts, stops or changes a backup job.
 
 ## Status
 
-Phase 1 is in progress. See [PLAN.md](./PLAN.md) for the design and the full task list.
+Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and tested. It is **not production-ready**. Four things have never been run against the real system they depend on, and several production requirements are not built.
 
-| Step | What                                                         | State  |
-| ---- | ------------------------------------------------------------ | ------ |
-| 1    | Monorepo scaffold, Docker Compose, env example, brand config | Done   |
-| 2    | App shell: theme, navigation, branded sign-in and onboarding | Done   |
-| 3    | Schema, migrations, row-level security                       | Done   |
-| 4    | Core: status types, missed-backup rule, envelope encryption  | Done   |
-| 5    | Connector interface, mock connector, seed script             | Done   |
-| 6    | Clerk auth, MFA enforcement, tenant onboarding               | Done\* |
-| 7    | Integrations page (Datto credentials, test connection)       | Done\* |
-| 8    | Datto BCDR connector                                         | Done\* |
-| 9    | Worker: scheduler, sync job, incidents                       | Done   |
-| 10   | Dashboard and client drill-down                              | Done\* |
-| 11   | 3D fleet constellation with 2D fallback                      | Done\* |
-| 12   | Final pass                                                   | Next   |
+**What works, verified here:**
 
-\* Built and tested without a live Clerk instance or real Datto keys. Sign-in, MFA setup and webhook delivery have not been exercised end to end, and the Datto connector has only been run against a stand-in built from an assumed response shape. See [Authentication](#authentication) and [Datto BCDR](#datto-bcdr).
+- The database layer, tenant isolation, encryption, the missed-backup and incident rules, the sync pipeline and the worker, all tested against a real Postgres and Redis.
+- The whole product end to end on the built-in demo vendor: the worker process syncing, statuses and incidents derived, the dashboard and client pages rendering that data.
+
+**What has not been verified:**
+
+| Area            | State                                                                                                                           |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Clerk           | Never run against a live instance. Sign-in, MFA setup, organization creation and webhook delivery are untested end to end.      |
+| Signed-in pages | Because of the above, the pages were checked through a temporary preview route with seeded data, not behind a real session.     |
+| Datto BCDR      | The connector has never called Datto. Its response shapes are assumptions; see [Datto BCDR](#datto-bcdr) for the list to check. |
+| Docker Compose  | The file validates and the role script was run against a local Postgres, but the containers were never started.                 |
+| 3D view         | Only run with software rendering, never on a graphics card.                                                                     |
+
+**What is not built:** the production key provider (KMS), the Unitrends and VSPC connectors, notifications, time zones other than UTC, and the items listed in [SECURITY.md](./SECURITY.md).
+
+### Before production
+
+1. Run the app against a real Clerk instance and walk through sign-up, MFA, onboarding and the webhook.
+2. Connect a real Datto account and reconcile the connector's assumptions with what Datto returns.
+3. Write the KMS key provider for your cloud. The local key provider refuses to run in production.
+4. Work through the open items in [SECURITY.md](./SECURITY.md).
 
 ## Repository layout
 
@@ -48,7 +55,7 @@ Internal packages are consumed as TypeScript source (`exports` points at `src/in
 
 - Node.js 22 or newer (`.nvmrc` is provided)
 - pnpm 10 (`corepack enable` will pick up the version pinned in `package.json`)
-- Docker with Compose, for local Postgres 16 and Redis 7
+- Docker with Compose, for local Postgres 16 and Redis 7 (or your own Postgres 16 and Redis 7; see [Database roles](#database-roles))
 
 ## Setup
 
@@ -410,6 +417,7 @@ The owner role needs `CREATEDB` to run the database tests, which build and drop 
 - **One typeface, self-hosted.** Archivo is bundled in `apps/web/app/fonts` under the SIL Open Font License, so builds make no request to a font service. Headings use its wide setting (`font-wide`).
 - **Status colours mean status.** Red, amber and green are reserved for backup health. The brand colour is iris; design tokens are in `apps/web/app/globals.css`.
 - **UI components follow shadcn/ui.** They live in `apps/web/components/ui`; add more with `pnpm dlx shadcn@latest add <name>` from `apps/web`.
+- **Every page and server action checks the session first.** `requireTenant()` or `requireOwner()` must be the first thing a tenant page or a server action awaits; a test reads the source and fails otherwise.
 - **No secrets in the repository.** Only `.env.example` is committed, and it contains local-development placeholders.
 - **Never log credentials or raw vendor payloads.**
 - **Ask before adding a dependency** that is not already in the plan.

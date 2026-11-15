@@ -21,6 +21,8 @@ export const metadata: Metadata = {
   description: brand.description,
   applicationName: brand.name,
   icons: { icon: brand.logo.mark },
+  // A private application: nothing here should be in a search index.
+  robots: { index: false, follow: false },
 };
 
 export const viewport: Viewport = {

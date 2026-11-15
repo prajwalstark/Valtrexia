@@ -9,11 +9,18 @@ import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
  *
  * The webhook is authenticated by its signature, not by a session.
  */
+// Each entry matches the route and what is beneath it, and nothing that merely
+// starts with the same letters: "/sign-in" and "/sign-in/factor-one", but not
+// "/sign-in-anything-else".
 const isPublicRoute = createRouteMatcher([
-  "/sign-in(.*)",
-  "/sign-up(.*)",
-  "/mfa-required(.*)",
-  "/onboarding(.*)",
+  "/sign-in",
+  "/sign-in/(.*)",
+  "/sign-up",
+  "/sign-up/(.*)",
+  "/mfa-required",
+  "/mfa-required/(.*)",
+  "/onboarding",
+  "/onboarding/(.*)",
   "/api/webhooks/clerk",
 ]);
 

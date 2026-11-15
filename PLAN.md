@@ -2,7 +2,7 @@
 
 > Unified Backup Intelligence — _Every Backup. Every Client. Always in Sight._
 
-Status: **approved. Build in progress; see the status table in README.md.**
+Status: **Phase 1 built.** All twelve steps are done. README.md lists what has and has not been verified, and SECURITY.md lists what is still open.
 Section 9 records the decisions taken at approval.
 
 ---
@@ -280,6 +280,7 @@ Changes made during the build:
 - **No graphics acceleration was added as a reason to default to 2D.** The scene is slow when WebGL is drawn in software.
 - **Scene labels are plain HTML positioned from the camera**, not drei's `Html` component, which left a label empty under this React version. drei is still used for the drag-to-rotate controls.
 - **Clients are laid out on a sunflower spiral, worst first from the centre**, the same motif as the sign-in screen. The scene is drawn in a handful of batched calls and capped at 120 clients.
+- **Step 12 added four things beyond documentation**: baseline security response headers, an error page that shows no error text, exact (not prefix) public routes in the proxy, and a test that fails if a page or server action omits the session check.
 - **Decrypted credentials are wrapped in a `Secret` type** that prints as `[redacted]`. Not in the original plan; it backs up the logger's redaction.
 - **Navigation lists only pages that exist**: Dashboard and Integrations. The plan's route list is unchanged.
 
