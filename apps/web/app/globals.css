@@ -25,11 +25,19 @@
   --iris-dim: oklch(0.4 0.09 286);
   --iris-foreground: oklch(0.17 0.04 286);
 
+  /*
+   * Status colours. Checked with the dataviz palette validator against the
+   * page background: every pair is at least ΔE 8 apart under simulated
+   * protanopia and deuteranopia, at least ΔE 15 apart in normal vision, and
+   * each has 3:1 contrast against the surface. "Unknown" is a neutral grey on
+   * purpose. Colour is never the only signal: every status also carries an
+   * icon or glyph and a text label.
+   */
   --status-success: oklch(0.79 0.15 158);
   --status-warning: oklch(0.83 0.15 82);
   --status-critical: oklch(0.7 0.19 24);
-  --status-running: oklch(0.78 0.11 232);
-  --status-unknown: oklch(0.66 0.03 264);
+  --status-running: oklch(0.8 0.13 245);
+  --status-unknown: oklch(0.64 0.025 264);
 }
 
 @theme inline {

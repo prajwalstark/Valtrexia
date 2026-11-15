@@ -269,6 +269,10 @@ Changes made during the build:
 - **`failed` incidents follow the latest result; `missed` incidents follow the missed-backup verdict.** They are independent, and both close when an asset is archived, paused or muted. The rules are a pure function, `planIncidents`.
 - **`ioredis` is a direct dependency.** BullMQ 6 made its Redis client an optional peer; section 8 listed it as coming with BullMQ.
 - **The worker's start script runs a single Node process**, so a `SIGTERM` from an orchestrator reaches the worker itself.
+- **The dashboard summary is two thin segmented bars with figures beside them**, not stat tiles: clients by health and assets by status.
+- **The 14-day strip uses UTC days**, and each square shows the day's worst result. A per-workspace time zone is future work.
+- **Incident acknowledgement was added to the client page.** The step's scope line did not list it; approved decision 6 said technicians acknowledge incidents, and without it incidents would be write-only.
+- **Two status colours changed.** "Running" and "unknown" were too close to tell apart in normal vision (ΔE 14.9 against a floor of 15), found by the palette validator. Both were re-stepped.
 - **Decrypted credentials are wrapped in a `Secret` type** that prints as `[redacted]`. Not in the original plan; it backs up the logger's redaction.
 - **Navigation lists only pages that exist**: Dashboard and Integrations. The plan's route list is unchanged.
 

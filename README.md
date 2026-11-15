@@ -21,8 +21,8 @@ Phase 1 is in progress. See [PLAN.md](./PLAN.md) for the design and the full tas
 | 7    | Integrations page (Datto credentials, test connection)       | Done\*  |
 | 8    | Datto BCDR connector                                         | Done\*  |
 | 9    | Worker: scheduler, sync job, incidents                       | Done    |
-| 10   | Dashboard and client drill-down                              | Next    |
-| 11   | 3D fleet constellation with 2D fallback                      | Pending |
+| 10   | Dashboard and client drill-down                              | Done\*  |
+| 11   | 3D fleet constellation with 2D fallback                      | Next    |
 | 12   | Final pass                                                   | Pending |
 
 \* Built and tested without a live Clerk instance or real Datto keys. Sign-in, MFA setup and webhook delivery have not been exercised end to end, and the Datto connector has only been run against a stand-in built from an assumed response shape. See [Authentication](#authentication) and [Datto BCDR](#datto-bcdr).
@@ -32,7 +32,7 @@ Phase 1 is in progress. See [PLAN.md](./PLAN.md) for the design and the full tas
 ```
 apps/
   worker/         Scheduler, sync queue, sync pipeline, incident engine and seed script.
-  web/            Next.js app: shell, sign-in, onboarding, dashboard, integrations.
+  web/            Next.js app: sign-in, onboarding, dashboard, client pages, integrations.
 packages/
   core/           Shared logic: brand, vendors, statuses, the missed-backup rule, health roll-up,
                   and (server entry only) credential encryption and the redacting logger.
@@ -106,7 +106,7 @@ Internal packages are consumed as TypeScript source (`exports` points at `src/in
    pnpm worker:dev
    ```
 
-You will be asked to sign in, set up two-step verification and create a workspace. To attach the demo data to your workspace instead of a placeholder one, run the seed with your Clerk organization id: `SEED_CLERK_ORG_ID=org_... pnpm db:seed`. The dashboard that displays it arrives in step 10.
+You will be asked to sign in, set up two-step verification and create a workspace. To attach the demo data to your workspace instead of a placeholder one, run the seed with your Clerk organization id: `SEED_CLERK_ORG_ID=org_... pnpm db:seed`.
 
 ## Authentication
 
@@ -140,6 +140,24 @@ The decision logic lives in `apps/web/lib/session-core.ts` with no Clerk code in
 `/api/webhooks/clerk` keeps tenants and members in step with Clerk when changes happen outside a sign-in: an organization renamed, a member added, promoted or removed. Requests are verified by signature before the body is trusted. Handling is idempotent, because webhooks can be delivered more than once and out of order. A removed member is deactivated, not deleted, so the audit trail stays attributable. Deleting an organization in Clerk does **not** delete the tenant's data; that is a deliberate operator action.
 
 The app works without the webhook, since sign-in creates whatever is missing. The webhook matters for changes made while the person is not signed in.
+
+## Dashboard
+
+**Status strip.** Across the top of every page: how many watched assets have failed, been missed or warned right now, and when data was last synced. If an integration is failing to sync, it says so there.
+
+**Dashboard.** Two thin bars summarize the fleet, clients by health and assets by status, each with its figures written out beside it. Below them is every client, worst first: health, a one-line description of what is wrong ("2 failed, 1 missed of 6 assets"), its assets as a small bar, and its open incident count.
+
+**Client page.** The client's open incidents, then its assets worst first. Each asset shows its status, when it last backed up, and a strip of the last 14 days: one square per UTC day, showing that day's _worst_ result, so one failure is never hidden behind later successes. An empty square is a day with no backup. Opening an asset lists its individual backups with the vendor's own status, screenshot verification and any message. Assets that are archived, paused or muted are listed last and dimmed.
+
+**Acknowledging an incident** records who is looking at it and when. It does not close the incident; only a completed backup does. Owners and technicians can both acknowledge.
+
+How status is shown:
+
+- Every status has an icon and a word as well as a colour, and each day square has its own shape (cross, dot, ring, slash). Nothing depends on telling red from green.
+- The status colours were checked with a palette validator: each pair is distinguishable under simulated red-green colour blindness and in normal vision, and each has at least 3:1 contrast against the background.
+- Times are shown in UTC. A per-workspace time zone is not built yet.
+
+The vendor's raw payload and anything about credentials are never sent to the browser; the queries name the columns they return. The logic is in `apps/web/lib/dashboard-core.ts` and is tested against Postgres.
 
 ## Integrations
 

@@ -25,3 +25,33 @@ export function formatDate(date: Date): string {
     timeZone: "UTC",
   }).format(date);
 }
+
+/** "12 Nov, 13:05 UTC". Times are shown in UTC until workspaces have a time zone setting. */
+export function formatDateTime(date: Date): string {
+  const day = new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+  }).format(date);
+  const time = new Intl.DateTimeFormat("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    timeZone: "UTC",
+  }).format(date);
+  return `${day}, ${time} UTC`;
+}
+
+/** "12 Nov" from a YYYY-MM-DD day key. */
+export function formatDayKey(key: string): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+  }).format(new Date(`${key}T00:00:00Z`));
+}
+
+/** "1 asset", "3 assets". */
+export function count(n: number, singular: string, plural: string = `${singular}s`): string {
+  return `${n} ${n === 1 ? singular : plural}`;
+}

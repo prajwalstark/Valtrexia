@@ -4,17 +4,18 @@ import type { ReactNode } from "react";
 import { Wordmark } from "@/components/brand/logo";
 import { AppNav } from "@/components/shell/app-nav";
 import { Sightline } from "@/components/shell/sightline";
-import { requireTenant } from "@/lib/auth";
+import { getFleet } from "@/lib/fleet";
 
 /**
  * Command-center shell: a side rail on wide screens, a top bar on narrow ones,
  * and the fleet status strip above every page.
  */
 export default async function AppLayout({ children }: { children: ReactNode }) {
-  // Signed in, second factor in place, workspace selected. Redirects otherwise.
-  // Pages and server actions call this again themselves; a layout alone does
+  // getFleet() starts with requireTenant(): signed in, second factor in
+  // place, workspace selected; it redirects otherwise. Pages and server
+  // actions make that check again themselves, because a layout alone does
   // not protect them.
-  await requireTenant();
+  const { overview, now } = await getFleet();
 
   return (
     <div className="min-h-dvh md:grid md:grid-cols-[14.5rem_minmax(0,1fr)]">
@@ -51,7 +52,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
           </div>
         </div>
 
-        <Sightline />
+        <Sightline overview={overview} now={now} />
 
         <main id="main" className="flex-1 px-4 py-8 md:px-8 md:py-10">
           {children}
