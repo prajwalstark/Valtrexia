@@ -8,7 +8,7 @@ Version 1 is **read-only**. It never starts, stops or changes a backup job.
 
 ## Status
 
-Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and tested. It is **not production-ready**. Four things have never been run against the real system they depend on, and several production requirements are not built.
+Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and tested. Phase 2 is proposed in [PLAN-PHASE-2.md](./PLAN-PHASE-2.md) and is awaiting approval; none of it is built. It is **not production-ready**. Four things have never been run against the real system they depend on, and several production requirements are not built.
 
 **What works, verified here:**
 
