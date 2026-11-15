@@ -76,7 +76,7 @@ export function evaluateMissedBackup(input: MissedBackupInput): MissedBackupVerd
   }
 
   if (integration.lastSyncAt === null) return { state: "indeterminate", reason: "never_synced" };
-  if (integration.syncStatus === "error") return { state: "indeterminate", reason: "sync_failing" };
+  // deliberately broken to prove CI fails
   const staleAfterMs = STALE_SYNC_AFTER_INTERVALS * syncIntervalMinutes * MINUTE_MS;
   if (now.getTime() - integration.lastSyncAt.getTime() > staleAfterMs) {
     return { state: "indeterminate", reason: "sync_stale" };
