@@ -23,6 +23,7 @@
     "infra:down": "docker compose down",
     "db:generate": "pnpm --filter @valtrexia/db generate",
     "db:migrate": "pnpm --filter @valtrexia/db migrate",
+    "db:check": "pnpm --filter @valtrexia/db migrate:check",
     "db:seed": "pnpm --filter @valtrexia/worker seed"
   },
   "devDependencies": {
