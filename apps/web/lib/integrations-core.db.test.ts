@@ -666,6 +666,9 @@ describe("what the interface is given", () => {
         "name",
         "syncStatus",
         "vendor",
+        "lastSyncErrorKind",
+        "consecutiveFailures",
+        "failingSince",
       ].sort(),
     );
     expect(listed[0]).toMatchObject({ id, credentialHint: "9f3a" });

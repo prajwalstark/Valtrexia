@@ -33,6 +33,11 @@ interface AssetSpec {
   paused?: boolean;
   archived?: boolean;
   mutedUntil?: Date;
+  /** Hours since its last completed backup. Unset: it has never completed one. */
+  lastBackupHoursAgo?: number;
+  /** Hours since it was first seen. Unset: seen just now. */
+  firstSeenHoursAgo?: number;
+  frequencyHours?: number;
   /** [hours ago, status] for each result to store. */
   results?: [number, BackupStatus][];
   /** Open incident types to create for it. */
@@ -42,7 +47,19 @@ interface AssetSpec {
 /** A tenant with one integration and whatever clients and assets the test describes. */
 async function tenant(
   clients: Record<string, AssetSpec[]>,
-  options: { syncStatus?: "ok" | "error" | "never"; role?: TenantSession["role"] } = {},
+  options: {
+    syncStatus?: "ok" | "error" | "never" | "running";
+    role?: TenantSession["role"];
+    /** Hours since the integration last synced successfully. Default: five minutes. */
+    lastSyncHoursAgo?: number;
+    failures?: {
+      count: number;
+      sinceHoursAgo: number;
+      kind: "auth" | "network" | "vendor";
+      message: string;
+    };
+    graceHours?: number;
+  } = {},
 ) {
   const tenantId = await db.provisionTenant({ clerkOrgId: `org_${randomUUID()}`, name: "MSP" });
   return db.withTenant(tenantId, async ({ tx }) => {
@@ -62,9 +79,26 @@ async function tenant(
         name: "Demo data",
         credentialsEnc: { v: 1, ciphertext: "fixture-ciphertext-must-not-leak" },
         syncStatus: options.syncStatus ?? "ok",
-        lastSyncAt: options.syncStatus === "never" ? null : ago(5 * 60_000),
+        lastSyncAt:
+          options.syncStatus === "never"
+            ? null
+            : ago(options.lastSyncHoursAgo ? options.lastSyncHoursAgo * HOUR : 5 * 60_000),
+        // Relative to the test's clock, not today's real date. One that has
+        // never synced was connected two minutes ago.
+        createdAt: options.syncStatus === "never" ? ago(2 * 60_000) : ago(30 * DAY),
+        ...(options.failures
+          ? {
+              consecutiveFailures: options.failures.count,
+              failingSince: ago(options.failures.sinceHoursAgo * HOUR),
+              lastSyncErrorKind: options.failures.kind,
+              lastSyncError: options.failures.message,
+            }
+          : {}),
       },
     });
+    if (options.graceHours !== undefined) {
+      await tx.tenant.update({ where: { id: tenantId }, data: { graceHours: options.graceHours } });
+    }
     const ids: Record<string, string> = {};
     const assetIds: Record<string, string> = {};
     const incidentIds: Record<string, string> = {};
@@ -85,6 +119,10 @@ async function tenant(
             isPaused: spec.paused ?? false,
             isArchived: spec.archived ?? false,
             mutedUntil: spec.mutedUntil ?? null,
+            firstSeenAt: ago((spec.firstSeenHoursAgo ?? 0) * HOUR),
+            lastSuccessAt:
+              spec.lastBackupHoursAgo === undefined ? null : ago(spec.lastBackupHoursAgo * HOUR),
+            ...(spec.frequencyHours ? { expectedFrequencyHours: spec.frequencyHours } : {}),
           },
         });
         assetIds[spec.name] = asset.id;
@@ -256,6 +294,195 @@ describe("getFleetOverview", () => {
     expect(overview.integrations).toMatchObject({ total: 1, failing: 1, waiting: 0 });
   });
 
+  it("shows an asset as unknown once its window closes behind a failing integration", async () => {
+    // Nothing has been read from the vendor for 30 hours.
+    const { session } = await tenant(
+      {
+        "Blind Co": [
+          // Daily, last backup 31 hours ago: its 26-hour window closed unseen.
+          { name: "daily", status: "success", lastBackupHoursAgo: 31 },
+          { name: "daily-running", status: "running", lastBackupHoursAgo: 31 },
+          // Weekly: its last backup still covers it, whatever has happened since.
+          { name: "weekly", status: "success", lastBackupHoursAgo: 31, frequencyHours: 168 },
+          // Known problems stay exactly as they were.
+          { name: "was-failed", status: "failed", lastBackupHoursAgo: 80 },
+          { name: "was-missed", status: "missed", lastBackupHoursAgo: 80 },
+          { name: "was-warning", status: "warning", lastBackupHoursAgo: 31 },
+          // Not watched: left alone and left out.
+          {
+            name: "muted",
+            status: "success",
+            lastBackupHoursAgo: 31,
+            mutedUntil: new Date(NOW.getTime() + DAY),
+          },
+        ],
+      },
+      {
+        syncStatus: "error",
+        lastSyncHoursAgo: 30,
+        failures: {
+          count: 9,
+          sinceHoursAgo: 29,
+          kind: "network",
+          message: "The vendor API could not be reached.",
+        },
+      },
+    );
+    const overview = await getFleetOverview({ db }, session, NOW);
+
+    expect(overview.assets).toEqual({
+      watched: 6,
+      excluded: 1,
+      counts: { success: 1, warning: 1, failed: 1, missed: 1, running: 0, unknown: 2 },
+    });
+    expect(overview.clients[0]!.summary).toMatchObject({ health: "red", affected: 2 });
+    expect(overview.integrations).toEqual({
+      total: 1,
+      failing: 1,
+      stalled: 0,
+      waiting: 0,
+      lastSyncAt: ago(30 * HOUR),
+      problems: [
+        {
+          id: expect.any(String) as string,
+          name: "Demo data",
+          vendor: "mock",
+          state: "unhealthy",
+          since: ago(29 * HOUR),
+          needsAction: false,
+          error: "The vendor API could not be reached.",
+          lastSyncAt: ago(30 * HOUR),
+          // The two shown as unknown. The three with a known problem keep
+          // it and are not counted again; nor are the weekly and muted ones.
+          unconfirmedAssets: 2,
+        },
+      ],
+    });
+  });
+
+  it("does the same when nothing is failing but nothing is arriving: the worker has stopped", async () => {
+    // No sync has recorded an error. The last one succeeded, 30 hours ago.
+    const { session } = await tenant(
+      {
+        "Quiet Co": [
+          { name: "daily", status: "success", lastBackupHoursAgo: 31 },
+          { name: "weekly", status: "success", lastBackupHoursAgo: 31, frequencyHours: 168 },
+        ],
+      },
+      { syncStatus: "ok", lastSyncHoursAgo: 30 },
+    );
+    const overview = await getFleetOverview({ db }, session, NOW);
+
+    expect(overview.assets.counts).toMatchObject({ success: 1, unknown: 1 });
+    expect(overview.clients[0]!.summary.health).toBe("amber");
+    expect(overview.integrations).toMatchObject({ failing: 0, stalled: 1, waiting: 0 });
+    expect(overview.integrations.problems).toEqual([
+      expect.objectContaining({
+        state: "stalled",
+        since: ago(30 * HOUR),
+        error: null,
+        needsAction: false,
+        unconfirmedAssets: 1,
+      }),
+    ]);
+  });
+
+  it("treats a sync stuck in progress, and one that never started, as stalled", async () => {
+    const stuck = await tenant(
+      { "Stuck Co": [{ name: "a", status: "success", lastBackupHoursAgo: 31 }] },
+      { syncStatus: "running", lastSyncHoursAgo: 30 },
+    );
+    const stuckView = await getFleetOverview({ db }, stuck.session, NOW);
+    expect(stuckView.integrations).toMatchObject({ stalled: 1 });
+    expect(stuckView.assets.counts.unknown).toBe(1);
+
+    const never = await tenant({}, { syncStatus: "never" });
+    await db.withTenant(never.session.tenantId, ({ tx }) =>
+      tx.integration.updateMany({ data: { createdAt: ago(3 * HOUR) } }),
+    );
+    const neverView = await getFleetOverview({ db }, never.session, NOW);
+    expect(neverView.integrations).toMatchObject({ stalled: 1, waiting: 0 });
+  });
+
+  it("leaves stored statuses alone while the data is fresh", async () => {
+    // A daily asset 31 hours without a backup, but synced five minutes ago:
+    // the sync has seen it and stored what it found. Reading adds nothing.
+    const { session } = await tenant({
+      "Fresh Co": [
+        { name: "a", status: "success", lastBackupHoursAgo: 31 },
+        { name: "b", status: "missed", lastBackupHoursAgo: 31 },
+        { name: "c", status: "running", lastBackupHoursAgo: 31 },
+      ],
+    });
+    const overview = await getFleetOverview({ db }, session, NOW);
+    expect(overview.assets.counts).toMatchObject({ success: 1, missed: 1, running: 1, unknown: 0 });
+    expect(overview.integrations.problems).toEqual([]);
+  });
+
+  it("one failed sync does not turn assets unknown while their windows are still open", async () => {
+    const { session } = await tenant(
+      { "Brief Co": [{ name: "a", status: "success", lastBackupHoursAgo: 6 }] },
+      {
+        syncStatus: "error",
+        lastSyncHoursAgo: 0.5,
+        failures: { count: 1, sinceHoursAgo: 0.25, kind: "vendor", message: "HTTP 503." },
+      },
+    );
+    const overview = await getFleetOverview({ db }, session, NOW);
+    expect(overview.assets.counts).toMatchObject({ success: 1, unknown: 0 });
+    // Still amber: the client's data is not current.
+    expect(overview.clients[0]!.summary.health).toBe("amber");
+    expect(overview.integrations.problems).toEqual([
+      expect.objectContaining({ state: "retrying", unconfirmedAssets: 0, needsAction: false }),
+    ]);
+  });
+
+  it("keeps treating a run of failures as failing while the next attempt is in progress", async () => {
+    const { session } = await tenant(
+      { "Retry Co": [{ name: "a", status: "success", lastBackupHoursAgo: 31 }] },
+      {
+        syncStatus: "running",
+        lastSyncHoursAgo: 0.5,
+        failures: { count: 2, sinceHoursAgo: 0.4, kind: "network", message: "Unreachable." },
+      },
+    );
+    const overview = await getFleetOverview({ db }, session, NOW);
+    expect(overview.integrations).toMatchObject({ failing: 1, stalled: 0 });
+    expect(overview.assets.counts.unknown).toBe(1);
+  });
+
+  it("says when a rejected key needs replacing, at the first failure", async () => {
+    const { session } = await tenant(
+      { "Key Co": [{ name: "a", status: "success", lastBackupHoursAgo: 6 }] },
+      {
+        syncStatus: "error",
+        lastSyncHoursAgo: 0.5,
+        failures: { count: 1, sinceHoursAgo: 0.25, kind: "auth", message: "Rejected." },
+      },
+    );
+    const [problem] = (await getFleetOverview({ db }, session, NOW)).integrations.problems;
+    expect(problem).toMatchObject({ state: "unhealthy", needsAction: true, error: "Rejected." });
+  });
+
+  it("uses the workspace's grace period and the configured sync interval", async () => {
+    // 31 hours since the last backup is inside a 24 + 10 hour window.
+    const generous = await tenant(
+      { "Grace Co": [{ name: "a", status: "success", lastBackupHoursAgo: 31 }] },
+      { syncStatus: "ok", lastSyncHoursAgo: 30, graceHours: 10 },
+    );
+    const view = await getFleetOverview({ db }, generous.session, NOW);
+    expect(view.assets.counts).toMatchObject({ success: 1, unknown: 0 });
+
+    // Fifty minutes without a sync is stalled at 15-minute syncs, normal at hourly ones.
+    const { session } = await tenant(
+      { "Interval Co": [{ name: "a", status: "success", lastBackupHoursAgo: 6 }] },
+      { syncStatus: "ok", lastSyncHoursAgo: 50 / 60 },
+    );
+    expect((await getFleetOverview({ db }, session, NOW)).integrations.stalled).toBe(1);
+    const hourly = await getFleetOverview({ db, syncIntervalMinutes: 60 }, session, NOW);
+    expect(hourly.integrations).toMatchObject({ stalled: 0, problems: [] });
+  });
+
   it("counts open incidents per client and in total, ignoring closed ones", async () => {
     const { session, incidentIds } = await tenant({
       "One Co": [{ name: "a", status: "failed", incidents: ["failed", "missed"] }],
@@ -279,16 +506,20 @@ describe("getFleetOverview", () => {
     expect((await getFleetOverview({ db }, synced.session, NOW)).integrations).toEqual({
       total: 1,
       failing: 0,
+      stalled: 0,
       waiting: 0,
       lastSyncAt: ago(5 * 60_000),
+      problems: [],
     });
 
     const waiting = await tenant({}, { syncStatus: "never" });
     expect((await getFleetOverview({ db }, waiting.session, NOW)).integrations).toEqual({
       total: 1,
       failing: 0,
+      stalled: 0,
       waiting: 1,
       lastSyncAt: null,
+      problems: [],
     });
   });
 
@@ -309,7 +540,14 @@ describe("getFleetOverview", () => {
         counts: { success: 0, warning: 0, failed: 0, missed: 0, running: 0, unknown: 0 },
       },
       openIncidents: 0,
-      integrations: { total: 0, failing: 0, waiting: 0, lastSyncAt: null },
+      integrations: {
+        total: 0,
+        failing: 0,
+        stalled: 0,
+        waiting: 0,
+        lastSyncAt: null,
+        problems: [],
+      },
     });
   });
 
@@ -371,6 +609,42 @@ describe("getClientDetail", () => {
       vendor: "mock",
       expectedFrequencyHours: 24,
     });
+  });
+
+  it("shows unconfirmed assets as unknown, says since when, and ranks them accordingly", async () => {
+    const { session, clientIds } = await tenant(
+      {
+        "Blind Co": [
+          { name: "weekly", status: "success", lastBackupHoursAgo: 31, frequencyHours: 168 },
+          { name: "daily", status: "success", lastBackupHoursAgo: 31 },
+          { name: "was-failed", status: "failed", lastBackupHoursAgo: 80 },
+        ],
+      },
+      { syncStatus: "ok", lastSyncHoursAgo: 30 },
+    );
+    const detail = (await getClientDetail({ db }, session, clientIds["Blind Co"]!, NOW))!;
+
+    expect(detail.assets.map((a) => [a.name, a.currentStatus, a.unconfirmedSince])).toEqual([
+      // Its window closed long ago too, but what we last knew was a failure.
+      ["was-failed", "failed", ago(30 * HOUR)],
+      ["daily", "unknown", ago(30 * HOUR)],
+      ["weekly", "success", null],
+    ]);
+    expect(detail.summary).toMatchObject({
+      health: "red",
+      counts: { failed: 1, unknown: 1, success: 1 },
+    });
+
+    // The same client once data is arriving again.
+    await db.withTenant(session.tenantId, ({ tx }) =>
+      tx.integration.updateMany({ data: { lastSyncAt: ago(60_000) } }),
+    );
+    const fresh = (await getClientDetail({ db }, session, clientIds["Blind Co"]!, NOW))!;
+    expect(fresh.assets.map((a) => [a.name, a.currentStatus, a.unconfirmedSince])).toEqual([
+      ["was-failed", "failed", null],
+      ["daily", "success", null],
+      ["weekly", "success", null],
+    ]);
   });
 
   it("gives each asset a 14-day strip and its results, newest first", async () => {

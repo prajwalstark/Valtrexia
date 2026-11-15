@@ -34,7 +34,9 @@ type Action = "open" | "close" | "leave";
  * technician sees one item per problem rather than one per failed attempt.
  *
  * `missed` follows the missed-backup verdict:
- *   missed -> open; ok -> close; suppressed -> close; indeterminate -> leave.
+ *   missed -> open; ok -> close; suppressed -> close;
+ *   indeterminate or unconfirmed -> leave: we could not look, so nothing has
+ *     been learned either way.
  *
  * `failed` follows the latest result:
  *   failed -> open
@@ -53,7 +55,7 @@ export function planIncidents(input: IncidentInput): IncidentPlan {
   const missed: Action =
     input.verdict.state === "missed"
       ? "open"
-      : input.verdict.state === "indeterminate"
+      : input.verdict.state === "indeterminate" || input.verdict.state === "unconfirmed"
         ? "leave"
         : "close";
 

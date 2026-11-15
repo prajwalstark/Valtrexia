@@ -3,6 +3,7 @@ import { IntegrationsView } from "@/components/integrations/integrations-view";
 import { requireTenant } from "@/lib/auth";
 import { getSafeDb } from "@/lib/db";
 import { listIntegrationsFor } from "@/lib/integrations-core";
+import { syncIntervalMinutes } from "@/lib/sync-config";
 
 export const metadata: Metadata = { title: "Integrations" };
 
@@ -20,6 +21,7 @@ export default async function IntegrationsPage({
       integrations={integrations}
       canManage={session.role === "owner"}
       now={new Date()}
+      syncIntervalMinutes={syncIntervalMinutes()}
       disconnected={disconnected === "1"}
     />
   );

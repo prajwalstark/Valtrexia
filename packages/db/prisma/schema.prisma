@@ -53,6 +53,20 @@ enum SyncStatus {
   @@map("sync_status")
 }
 
+/// Why a sync failed. Mirrors SYNC_ERROR_KINDS in packages/core.
+enum SyncErrorKind {
+  auth
+  credentials
+  rate_limited
+  network
+  vendor
+  invalid_response
+  unavailable
+  internal
+
+  @@map("sync_error_kind")
+}
+
 enum IncidentType {
   failed
   missed
@@ -122,21 +136,27 @@ model User {
 
 /// A connection to one vendor account.
 model Integration {
-  id                String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  tenantId          String     @map("tenant_id") @db.Uuid
-  vendor            Vendor
-  name              String
+  id                  String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId            String         @map("tenant_id") @db.Uuid
+  vendor              Vendor
+  name                String
   /// Envelope-encrypted credentials. Never selected for the browser.
-  credentialsEnc    Json       @map("credentials_enc")
+  credentialsEnc      Json           @map("credentials_enc")
   /// Last characters of the public key: the only credential-derived value shown in the UI.
-  credentialHint    String?    @map("credential_hint")
-  lastSyncAt        DateTime?  @map("last_sync_at") @db.Timestamptz(3)
-  lastSyncStartedAt DateTime?  @map("last_sync_started_at") @db.Timestamptz(3)
-  syncStatus        SyncStatus @default(never) @map("sync_status")
+  credentialHint      String?        @map("credential_hint")
+  lastSyncAt          DateTime?      @map("last_sync_at") @db.Timestamptz(3)
+  lastSyncStartedAt   DateTime?      @map("last_sync_started_at") @db.Timestamptz(3)
+  syncStatus          SyncStatus     @default(never) @map("sync_status")
   /// Sanitized, human-readable reason for the last failed sync.
-  lastSyncError     String?    @map("last_sync_error")
-  createdAt         DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt         DateTime   @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  lastSyncError       String?        @map("last_sync_error")
+  /// What sort of failure that was. Decides whether retrying can help.
+  lastSyncErrorKind   SyncErrorKind? @map("last_sync_error_kind")
+  /// Failed syncs in a row. Zero after any successful sync.
+  consecutiveFailures Int            @default(0) @map("consecutive_failures")
+  /// When the current run of failures began. Null when the last sync succeeded.
+  failingSince        DateTime?      @map("failing_since") @db.Timestamptz(3)
+  createdAt           DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   tenant               Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   vendorClientMappings VendorClientMapping[]

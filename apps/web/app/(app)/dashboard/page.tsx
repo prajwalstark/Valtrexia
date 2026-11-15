@@ -8,7 +8,7 @@ export const metadata: Metadata = { title: "Dashboard" };
 
 export default async function DashboardPage() {
   // getFleet() calls requireTenant(): signed in, second factor, workspace.
-  const { overview } = await getFleet();
+  const { overview, now } = await getFleet();
 
   // Render the same fleet view the browser showed last time, so the page
   // does not jump when the client-side check agrees.
@@ -18,5 +18,5 @@ export default async function DashboardPage() {
     capable: jar.get(CAPABLE_COOKIE)?.value,
   });
 
-  return <DashboardView overview={overview} fleetViewMode={fleetViewMode} />;
+  return <DashboardView overview={overview} now={now} fleetViewMode={fleetViewMode} />;
 }

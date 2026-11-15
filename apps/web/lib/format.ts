@@ -12,6 +12,15 @@ export function timeAgo(date: Date, now: Date = new Date()): string {
   return `on ${formatDate(date)}`;
 }
 
+/** How long ago, as a length of time: "a moment", "5 minutes", "3 hours", "2 days". */
+export function elapsed(date: Date, now: Date = new Date()): string {
+  const ms = now.getTime() - date.getTime();
+  if (ms < MINUTE) return "a moment";
+  if (ms < HOUR) return count(Math.floor(ms / MINUTE), "minute");
+  if (ms < DAY) return count(Math.floor(ms / HOUR), "hour");
+  return count(Math.floor(ms / DAY), "day");
+}
+
 function plural(count: number, unit: string): string {
   return `${count} ${unit}${count === 1 ? "" : "s"} ago`;
 }

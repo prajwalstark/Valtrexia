@@ -8,7 +8,7 @@ Version 1 is **read-only**. It never starts, stops or changes a backup job.
 
 ## Status
 
-Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and tested. Phase 2 is under way, following [PLAN-PHASE-2.md](./PLAN-PHASE-2.md): step 1 of 12 (continuous integration) is done. It is **not production-ready**. Three things have never been run against the real system they depend on, and several production requirements are not built.
+Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and tested. Phase 2 is under way, following [PLAN-PHASE-2.md](./PLAN-PHASE-2.md): steps 1 and 2 of 12 are done (continuous integration; handling of vendor data that stops arriving). It is **not production-ready**. Three things have never been run against the real system they depend on, and several production requirements are not built.
 
 **What works, verified here:**
 
@@ -150,7 +150,9 @@ The app works without the webhook, since sign-in creates whatever is missing. Th
 
 ## Dashboard
 
-**Status strip.** Across the top of every page: how many watched assets have failed, been missed or warned right now, and when data was last synced. If an integration is failing to sync, it says so there.
+**Status strip.** Across the top of every page: how many watched assets have failed, been missed, warned or cannot be confirmed right now, and when data was last synced. If an integration is failing to sync, or syncs have stopped altogether, it says so there.
+
+**Integration problems.** When a vendor's data cannot be relied on, the dashboard says so above everything else, one line per integration: how long it has been failing and why, or since when nothing has arrived, and how many assets that leaves unconfirmed. A rejected key links straight to replacing it. If every integration has gone quiet at once, it says the background worker may not be running. See [When vendor data stops arriving](#when-vendor-data-stops-arriving).
 
 **Dashboard.** Two thin bars summarize the fleet, clients by health and assets by status, each with its figures written out beside it. Below them is every client, worst first: health, a one-line description of what is wrong ("2 failed, 1 missed of 6 assets"), its assets as a small bar, and its open incident count.
 
@@ -292,12 +294,12 @@ The demo vendor is available only when `VALTREXIA_ENABLE_MOCK=true`, and never w
 
 Finding what is due is the system's one cross-tenant read. It goes through a SQL function that returns ids only; each sync then runs inside its own tenant. A queued job carries two ids and nothing else: no names, no credentials.
 
-| Setting                  | Default | Meaning                                             |
-| ------------------------ | ------- | --------------------------------------------------- |
-| `SYNC_INTERVAL_MINUTES`  | 15      | How often each integration is synced                |
-| `SYNC_CONCURRENCY`       | 5       | Integrations synced at the same time by one process |
-| `SCHEDULER_TICK_SECONDS` | 60      | How often the scheduler looks for due integrations  |
-| `LOG_LEVEL`              | info    | Worker log verbosity                                |
+| Setting                  | Default | Meaning                                                                                  |
+| ------------------------ | ------- | ---------------------------------------------------------------------------------------- |
+| `SYNC_INTERVAL_MINUTES`  | 15      | How often each integration is synced. Also read by the web app; give both the same value |
+| `SYNC_CONCURRENCY`       | 5       | Integrations synced at the same time by one process                                      |
+| `SCHEDULER_TICK_SECONDS` | 60      | How often the scheduler looks for due integrations                                       |
+| `LOG_LEVEL`              | info    | Worker log verbosity                                                                     |
 
 ### Incidents
 
@@ -323,18 +325,41 @@ The logic is pure functions in `packages/core`, with no database or network acce
 
 **Statuses.** Every vendor result is normalized to one of `success`, `warning`, `failed`, `missed`, `running` or `unknown`. A warning still counts as a completed backup: one that succeeded but failed screenshot verification produced a restore point.
 
-**Missed backups** (`evaluateMissedBackup`). An asset is missed when its last completed backup, or its discovery if it has never had one, is more than its expected frequency plus the tenant's grace period ago. The rule returns one of four verdicts:
+**Missed backups** (`evaluateMissedBackup`). An asset is missed when its last completed backup, or its discovery if it has never had one, is more than its expected frequency plus the tenant's grace period ago. The rule returns one of five verdicts:
 
-| Verdict         | When                                                                         | Effect on a missed-backup incident |
-| --------------- | ---------------------------------------------------------------------------- | ---------------------------------- |
-| `missed`        | No completed backup inside the window                                        | Open one                           |
-| `ok`            | A completed backup inside the window                                         | Close it                           |
-| `suppressed`    | The asset is archived, paused or muted                                       | Close it                           |
-| `indeterminate` | The integration has never synced, is failing, or last synced over 45 min ago | Leave it as it is                  |
+| Verdict         | When                                                                                   | Effect on a missed-backup incident |
+| --------------- | -------------------------------------------------------------------------------------- | ---------------------------------- |
+| `missed`        | No completed backup inside the window                                                  | Open one                           |
+| `ok`            | A completed backup inside the window                                                   | Close it                           |
+| `suppressed`    | The asset is archived, paused or muted                                                 | Close it                           |
+| `indeterminate` | The vendor data is out of date, but the asset's last backup is still inside its window | Leave it as it is                  |
+| `unconfirmed`   | The vendor data is out of date, and the window has closed since                        | Leave it as it is                  |
 
-`indeterminate` exists so that a vendor outage does not raise a missed-backup incident on every asset that vendor protects.
+Vendor data is out of date when the integration has never synced, its sync is failing, or its last successful sync is more than three sync intervals old (45 minutes by default). The last two verdicts exist so that a vendor outage does not raise a missed-backup incident on every asset that vendor protects.
 
-**Client health** (`summarizeClientHealth`). Red if any watched asset has failed or missed; amber for a warning, an uninterpretable status, or a failing vendor sync; green otherwise; and `none` when a client has no watched assets. Muted, paused and archived assets are left out. Clients sort worst first, then by number of affected assets, then by name.
+### When vendor data stops arriving
+
+A stored status is only as fresh as the sync that wrote it. Two things can stop syncs: a vendor problem (an outage, a revoked key), which records an error, and the worker itself stopping, which records nothing at all. Both are handled the same way, and neither can leave an asset looking backed up indefinitely.
+
+**Assets.** When an asset's verdict is `unconfirmed`, it is shown as `unknown`, with "No vendor data since …" beside it, and it stops counting as backed up in every total. An asset last seen failed, missed or with a warning keeps that status: not being able to look never makes an asset look better than it last was. No incident is opened, because nothing was seen to go wrong, and none is closed.
+
+This is worked out each time a page is read (`statusInView`), from the stored status, the asset's window and the integration's last successful sync. It is deliberately not written by a background job: the worker being down is one of the cases it has to catch.
+
+**Integrations** (`assessIntegrationHealth`). Each sync failure records how many have happened in a row, when the run began, and what kind of failure it was.
+
+| State       | When                                                                                                                                         |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `waiting`   | Connected, first sync not finished                                                                                                           |
+| `healthy`   | The last sync succeeded recently                                                                                                             |
+| `retrying`  | One to three failures in a row of a kind that can clear by itself                                                                            |
+| `unhealthy` | Four failures in a row (an hour by default), or one failure the vendor will repeat: a rejected key, or saved credentials that cannot be read |
+| `stalled`   | Nothing is failing, but no sync has finished for more than three intervals                                                                   |
+
+A successful sync, or replacing the credentials, ends a run of failures. The worker logs a warning when an integration becomes unhealthy and a line when it recovers. Notifications for both arrive with the alerting work in [PLAN-PHASE-2.md](./PLAN-PHASE-2.md).
+
+The web app and the worker must be given the same `SYNC_INTERVAL_MINUTES`, since the web app uses it to judge freshness. Each refuses a value that is not a whole number from 1 to 1440, and a test checks that they accept and refuse the same values.
+
+**Client health** (`summarizeClientHealth`). Red if any watched asset has failed or missed; amber for a warning, a status that is unknown or cannot be confirmed, or vendor data that is out of date; green otherwise; and `none` when a client has no watched assets. Muted, paused and archived assets are left out. Clients sort worst first, then by number of affected assets, then by name.
 
 ## Credentials and logs
 

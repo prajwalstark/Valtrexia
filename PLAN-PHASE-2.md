@@ -215,11 +215,18 @@ Each step's report will say which of its claims are tested and which are assumed
 
 ## 10. Progress
 
-| #   | Step | State | Notes                                                                                                                                                                     |
-| --- | ---- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | CI   | Done  | First run green on `phase-2`; a deliberately broken branch went red. The run also started Postgres and Redis with Docker Compose, which Phase 1 had never been able to do |
+| #   | Step                            | State | Notes                                                                                                                                                                     |
+| --- | ------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | CI                              | Done  | First run green on `phase-2`; a deliberately broken branch went red. The run also started Postgres and Redis with Docker Compose, which Phase 1 had never been able to do |
+| 2   | Vendor data that stops arriving | Done  | Built without the sweep job the plan described; see the first two changes below                                                                                           |
 
 Changes made during the build:
+
+- **Step 2 has no sweep job.** Section 4.1 planned a worker job that would write `unknown` onto assets every 15 minutes. That job would run in the worker, and the worker being down is one of the two cases it had to catch, so it could not have caught it. The status is worked out when a page is read instead (`statusInView` in `packages/core`), from the stored status, the asset's window and the integration's last successful sync. It needs no job, no cross-tenant function and no extra write, and it holds when nothing is running. Sync failures are counted where they happen, in the sync job.
+- **Section 1 overstated the gap.** It said that when a sync fails "the integrations page shows the error, but nothing else does". Phase 1 already turned the affected clients amber and put a notice on the dashboard. What was missing, and is now built: the assets themselves kept their last status and stayed in the "backed up" totals; a worker that had stopped was not detected at all; and nothing recorded how long an integration had been failing or whether waiting could fix it.
+- **A stalled state was added** for integrations: nothing failing, nothing arriving. The plan covered failing syncs only.
+- **`Integration.lastSyncErrorKind` was added** beside the two planned columns, so a rejected key (which will not fix itself) is treated differently from an outage. The planned definer function was not needed.
+- **An asset last seen failed, missed or with a warning keeps that status** when it becomes unconfirmed, instead of turning `unknown`. Decision 11 said "show it as `unknown`"; applied literally, that would downgrade a known failure to amber during an outage.
 
 - **CI starts the services with Docker Compose**, not GitHub's service containers, so the workflow exercises the same `docker-compose.yml` and role script a developer uses.
 - **pnpm is installed with Corepack**, which ships with Node, instead of a third-party action.

@@ -13,6 +13,7 @@ import {
 import { requireTenant } from "@/lib/auth";
 import { getSafeDb } from "@/lib/db";
 import { getIntegrationFor } from "@/lib/integrations-core";
+import { syncIntervalMinutes } from "@/lib/sync-config";
 
 export const metadata: Metadata = { title: "Integration" };
 
@@ -37,6 +38,7 @@ export default async function IntegrationPage({
       integration={integration}
       canManage={session.role === "owner"}
       now={new Date()}
+      syncIntervalMinutes={syncIntervalMinutes()}
       justConnected={connected === "1"}
       testSlot={<TestConnection action={testSavedAction.bind(null, integration.id)} />}
       replaceSlot={

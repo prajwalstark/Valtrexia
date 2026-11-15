@@ -58,7 +58,7 @@ Not built. Each should be settled before production use.
 5. **Transport security for Postgres and Redis.** Connection strings are taken as given. Production should require TLS and authentication on both.
 6. **Tenant offboarding.** Deleting an organization in Clerk does not delete its data. There is no deletion or export procedure yet.
 7. **Retention.** Backup results, raw payloads and audit entries are kept indefinitely.
-8. **Monitoring and alerting** on the application itself: failed syncs across tenants, queue depth, error rates.
+8. **Monitoring and alerting** on the application itself: failed syncs across tenants, queue depth, error rates. A stopped worker is now visible inside the app (assets turn unknown and the dashboard says syncs have stopped), but only to someone looking at it. Nothing pages an operator.
 9. **Database backups** of this application's own Postgres.
 10. **An independent review.** Nobody other than the author has reviewed this code.
 

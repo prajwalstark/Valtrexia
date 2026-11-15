@@ -1,13 +1,19 @@
 import {
+  assessIntegrationHealth,
   compareWorstFirst,
+  evaluateMissedBackup,
   HEALTH_LEVELS,
   isWatched,
+  statusInView,
   statusSeverity,
   summarizeClientHealth,
+  SYNC_INTERVAL_MINUTES,
   worstStatus,
   type BackupStatus,
   type ClientHealth,
   type Health,
+  type IntegrationHealth,
+  type SyncErrorKind,
   type VendorId,
 } from "@valtrexia/core";
 import { recordAudit, type Db } from "@valtrexia/db";
@@ -37,6 +43,134 @@ const emptyCounts = (): Record<BackupStatus, number> => ({
   unknown: 0,
 });
 
+export interface ReadDeps {
+  db: Db;
+  /** How often integrations are synced. Must match the worker's setting. */
+  syncIntervalMinutes?: number;
+}
+
+/** The asset fields the missed-backup rule reads. */
+const assetTimingSelect = {
+  currentStatus: true,
+  expectedFrequencyHours: true,
+  firstSeenAt: true,
+  lastSuccessAt: true,
+  mutedUntil: true,
+  isPaused: true,
+  isArchived: true,
+} as const;
+
+interface AssetTiming {
+  currentStatus: BackupStatus;
+  expectedFrequencyHours: number;
+  firstSeenAt: Date;
+  lastSuccessAt: Date | null;
+  mutedUntil: Date | null;
+  isPaused: boolean;
+  isArchived: boolean;
+}
+
+/** The integration fields that say how fresh its data is and how its syncs are going. */
+const integrationHealthSelect = {
+  id: true,
+  name: true,
+  vendor: true,
+  syncStatus: true,
+  lastSyncAt: true,
+  lastSyncError: true,
+  lastSyncErrorKind: true,
+  consecutiveFailures: true,
+  failingSince: true,
+  createdAt: true,
+} as const;
+
+interface IntegrationFreshness {
+  syncStatus: "never" | "running" | "ok" | "error";
+  lastSyncAt: Date | null;
+  lastSyncErrorKind: SyncErrorKind | null;
+  consecutiveFailures: number;
+  failingSince: Date | null;
+  createdAt: Date;
+}
+
+interface Clock {
+  now: Date;
+  graceHours: number;
+  syncIntervalMinutes: number;
+}
+
+/**
+ * An asset's status as it should be shown now.
+ *
+ * The stored status dates from the integration's last successful sync. If
+ * that sync is too old to say whether the asset's latest expected backup
+ * happened, the asset is shown as `unknown` rather than as it last looked.
+ * This is worked out here, on every read, so it holds even when the worker
+ * has stopped and nothing is updating the stored value.
+ */
+function assetInView(
+  asset: AssetTiming,
+  integration: IntegrationFreshness,
+  clock: Clock,
+): { status: BackupStatus; unconfirmedSince: Date | null } {
+  const verdict = evaluateMissedBackup({
+    now: clock.now,
+    asset: {
+      expectedFrequencyHours: asset.expectedFrequencyHours,
+      firstSeenAt: asset.firstSeenAt,
+      lastCompletedAt: asset.lastSuccessAt,
+      mutedUntil: asset.mutedUntil,
+      isPaused: asset.isPaused,
+      isArchived: asset.isArchived,
+    },
+    graceHours: clock.graceHours,
+    integration: {
+      // A retry in progress has not succeeded yet: the run of failures stands.
+      syncStatus: integration.consecutiveFailures > 0 ? "error" : integration.syncStatus,
+      lastSyncAt: integration.lastSyncAt,
+    },
+    syncIntervalMinutes: clock.syncIntervalMinutes,
+  });
+  return {
+    status: statusInView(asset.currentStatus, verdict),
+    unconfirmedSince: verdict.state === "unconfirmed" ? verdict.lastSyncAt : null,
+  };
+}
+
+function integrationHealth(integration: IntegrationFreshness, clock: Clock): IntegrationHealth {
+  return assessIntegrationHealth({
+    now: clock.now,
+    syncStatus: integration.syncStatus,
+    lastSyncAt: integration.lastSyncAt,
+    createdAt: integration.createdAt,
+    consecutiveFailures: integration.consecutiveFailures,
+    failingSince: integration.failingSince,
+    lastSyncErrorKind: integration.lastSyncErrorKind,
+    syncIntervalMinutes: clock.syncIntervalMinutes,
+  });
+}
+
+/** An integration whose data cannot currently be relied on. */
+export interface IntegrationProblem {
+  id: string;
+  name: string;
+  vendor: VendorId;
+  state: "retrying" | "unhealthy" | "stalled";
+  /** When the failures began, or when data last arrived for a stalled integration. */
+  since: Date | null;
+  /** True when retrying cannot fix it: the credentials need replacing. */
+  needsAction: boolean;
+  /** The message recorded by the last failed sync. Written by us, never the vendor. */
+  error: string | null;
+  lastSyncAt: Date | null;
+  /**
+   * Watched assets shown as unknown because their backup window has closed
+   * since this integration was last read. Assets last seen failed, missed or
+   * with a warning are not counted: they are already listed as problems.
+   */
+  unconfirmedAssets: number;
+}
+
 export interface FleetClient {
   id: string;
   name: string;
@@ -53,39 +187,38 @@ export interface FleetOverview {
   openIncidents: number;
   integrations: {
     total: number;
+    /** Syncs are failing: retrying or unhealthy. */
     failing: number;
+    /** Nothing is failing, but no sync has finished for several intervals. */
+    stalled: number;
     /** Connected but not yet synced for the first time. */
     waiting: number;
     /** The most recent successful sync across all integrations. */
     lastSyncAt: Date | null;
+    /** Every integration that is failing or stalled, worst first. */
+    problems: IntegrationProblem[];
   };
 }
 
 /** Every client in the tenant with its health, worst first, plus fleet totals. */
 export async function getFleetOverview(
-  deps: { db: Db },
+  deps: ReadDeps,
   session: TenantSession,
   now: Date,
 ): Promise<FleetOverview> {
-  const { integrations, clients, incidents } = await deps.db.withTenant(
+  const { tenant, integrations, clients, incidents } = await deps.db.withTenant(
     session.tenantId,
     async ({ tx }) => ({
-      integrations: await tx.integration.findMany({
-        select: { id: true, syncStatus: true, lastSyncAt: true },
+      tenant: await tx.tenant.findUniqueOrThrow({
+        where: { id: session.tenantId },
+        select: { graceHours: true },
       }),
+      integrations: await tx.integration.findMany({ select: integrationHealthSelect }),
       clients: await tx.client.findMany({
         select: {
           id: true,
           name: true,
-          assets: {
-            select: {
-              currentStatus: true,
-              mutedUntil: true,
-              isPaused: true,
-              isArchived: true,
-              integrationId: true,
-            },
-          },
+          assets: { select: { ...assetTimingSelect, integrationId: true } },
         },
       }),
       incidents: await tx.incident.findMany({
@@ -94,10 +227,21 @@ export async function getFleetOverview(
       }),
     }),
   );
+  const clock: Clock = {
+    now,
+    graceHours: tenant.graceHours,
+    syncIntervalMinutes: deps.syncIntervalMinutes ?? SYNC_INTERVAL_MINUTES,
+  };
 
-  const failingIntegrations = new Set(
-    integrations.filter((i) => i.syncStatus === "error").map((i) => i.id),
+  const integrationById = new Map(integrations.map((i) => [i.id, i]));
+  const healthById = new Map(integrations.map((i) => [i.id, integrationHealth(i, clock)]));
+  const unreliable = new Set(
+    integrations
+      .filter((i) => ["retrying", "unhealthy", "stalled"].includes(healthById.get(i.id)!.state))
+      .map((i) => i.id),
   );
+  const unconfirmedByIntegration = new Map<string, number>();
+
   const incidentsByClient = new Map<string, number>();
   for (const incident of incidents) {
     const clientId = incident.asset.clientId;
@@ -111,9 +255,19 @@ export async function getFleetOverview(
   const assets = { watched: 0, excluded: 0, counts: emptyCounts() };
 
   const rows = clients.map((client): FleetClient => {
-    const summary = summarizeClientHealth(client.assets, {
+    const inView = client.assets.map((asset) => {
+      const view = assetInView(asset, integrationById.get(asset.integrationId)!, clock);
+      if (view.unconfirmedSince && view.status === "unknown" && isWatched(asset, now)) {
+        unconfirmedByIntegration.set(
+          asset.integrationId,
+          (unconfirmedByIntegration.get(asset.integrationId) ?? 0) + 1,
+        );
+      }
+      return { ...asset, currentStatus: view.status };
+    });
+    const summary = summarizeClientHealth(inView, {
       now,
-      syncFailing: client.assets.some((a) => failingIntegrations.has(a.integrationId)),
+      syncFailing: client.assets.some((a) => unreliable.has(a.integrationId)),
     });
     health[summary.health] += 1;
     assets.watched += summary.watched;
@@ -130,6 +284,33 @@ export async function getFleetOverview(
   });
   rows.sort(compareWorstFirst);
 
+  const PROBLEM_ORDER = { unhealthy: 0, stalled: 1, retrying: 2 } as const;
+  const problems = integrations
+    .flatMap((integration): IntegrationProblem[] => {
+      const { state, since, needsAction } = healthById.get(integration.id)!;
+      if (state === "healthy" || state === "waiting") return [];
+      return [
+        {
+          id: integration.id,
+          name: integration.name,
+          vendor: integration.vendor,
+          state,
+          since,
+          needsAction,
+          error: state === "stalled" ? null : integration.lastSyncError,
+          lastSyncAt: integration.lastSyncAt,
+          unconfirmedAssets: unconfirmedByIntegration.get(integration.id) ?? 0,
+        },
+      ];
+    })
+    .sort(
+      (a, b) =>
+        PROBLEM_ORDER[a.state] - PROBLEM_ORDER[b.state] ||
+        b.unconfirmedAssets - a.unconfirmedAssets ||
+        a.name.localeCompare(b.name, "en", { numeric: true, sensitivity: "base" }),
+    );
+
+  const states = [...healthById.values()].map((h) => h.state);
   const synced = integrations.flatMap((i) => (i.lastSyncAt ? [i.lastSyncAt.getTime()] : []));
   return {
     clients: rows,
@@ -138,9 +319,11 @@ export async function getFleetOverview(
     openIncidents: incidents.length,
     integrations: {
       total: integrations.length,
-      failing: failingIntegrations.size,
-      waiting: integrations.filter((i) => i.syncStatus === "never").length,
+      failing: states.filter((state) => state === "retrying" || state === "unhealthy").length,
+      stalled: states.filter((state) => state === "stalled").length,
+      waiting: states.filter((state) => state === "waiting").length,
       lastSyncAt: synced.length > 0 ? new Date(Math.max(...synced)) : null,
+      problems,
     },
   };
 }
@@ -212,7 +395,13 @@ export interface ClientAsset {
   deviceName: string | null;
   integrationName: string;
   vendor: VendorId;
+  /** The status to show now. `unknown` when `unconfirmedSince` is set. */
   currentStatus: BackupStatus;
+  /**
+   * Set when the asset's backup window has closed and its vendor has not been
+   * read successfully since this time, so nothing newer is known.
+   */
+  unconfirmedSince: Date | null;
   /** What the vendor last reported, when the current status is the derived "missed". */
   lastResultStatus: BackupStatus | null;
   lastSuccessAt: Date | null;
@@ -245,7 +434,7 @@ export interface ClientDetail {
  * the caller cannot tell which, and should not be able to.
  */
 export async function getClientDetail(
-  deps: { db: Db },
+  deps: ReadDeps,
   session: TenantSession,
   clientId: string,
   now: Date,
@@ -265,16 +454,11 @@ export async function getClientDetail(
             name: true,
             type: true,
             deviceName: true,
-            currentStatus: true,
+            ...assetTimingSelect,
             lastResultStatus: true,
-            lastSuccessAt: true,
             lastResultAt: true,
-            expectedFrequencyHours: true,
-            isPaused: true,
-            isArchived: true,
-            mutedUntil: true,
             integrationId: true,
-            integration: { select: { name: true, vendor: true, syncStatus: true } },
+            integration: { select: integrationHealthSelect },
           },
         },
       },
@@ -309,10 +493,22 @@ export async function getClientDetail(
         acknowledgedBy: { select: { name: true, email: true } },
       },
     });
-    return { client, results, incidents };
+    const tenant = await tx.tenant.findUniqueOrThrow({
+      where: { id: session.tenantId },
+      select: { graceHours: true },
+    });
+    return { client, results, incidents, graceHours: tenant.graceHours };
   });
   if (!loaded) return null;
   const { client, results, incidents } = loaded;
+  const clock: Clock = {
+    now,
+    graceHours: loaded.graceHours,
+    syncIntervalMinutes: deps.syncIntervalMinutes ?? SYNC_INTERVAL_MINUTES,
+  };
+  const views = new Map(
+    client.assets.map((asset) => [asset.id, assetInView(asset, asset.integration, clock)]),
+  );
 
   const resultsByAsset = new Map<string, typeof results>();
   for (const result of results) {
@@ -323,6 +519,7 @@ export async function getClientDetail(
 
   const assets = client.assets.map((asset): ClientAsset => {
     const own = resultsByAsset.get(asset.id) ?? [];
+    const view = views.get(asset.id)!;
     return {
       id: asset.id,
       name: asset.name,
@@ -330,7 +527,8 @@ export async function getClientDetail(
       deviceName: asset.deviceName,
       integrationName: asset.integration.name,
       vendor: asset.integration.vendor,
-      currentStatus: asset.currentStatus,
+      currentStatus: view.status,
+      unconfirmedSince: view.unconfirmedSince,
       lastResultStatus: asset.lastResultStatus,
       lastSuccessAt: asset.lastSuccessAt,
       lastResultAt: asset.lastResultAt,
@@ -362,10 +560,17 @@ export async function getClientDetail(
   return {
     id: client.id,
     name: client.name,
-    summary: summarizeClientHealth(client.assets, {
-      now,
-      syncFailing: client.assets.some((a) => a.integration.syncStatus === "error"),
-    }),
+    summary: summarizeClientHealth(
+      client.assets.map((asset) => ({ ...asset, currentStatus: views.get(asset.id)!.status })),
+      {
+        now,
+        syncFailing: client.assets.some((asset) =>
+          ["retrying", "unhealthy", "stalled"].includes(
+            integrationHealth(asset.integration, clock).state,
+          ),
+        ),
+      },
+    ),
     assets,
     openIncidents: incidents.map((incident) => ({
       id: incident.id,

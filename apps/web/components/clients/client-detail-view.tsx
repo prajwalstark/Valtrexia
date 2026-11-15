@@ -166,6 +166,11 @@ function AssetRow({ asset, now }: { asset: ClientAsset; now: Date }) {
             {asset.lastSuccessAt
               ? `Last backup ${timeAgo(asset.lastSuccessAt, now)}`
               : "Never backed up"}
+            {asset.unconfirmedSince ? (
+              <span className="block text-subtle-foreground">
+                No vendor data since {formatDateTime(asset.unconfirmedSince)}
+              </span>
+            ) : null}
             {asset.currentStatus === "missed" && asset.lastResultStatus ? (
               <span className="block text-subtle-foreground">
                 Last result: {STATUS_META[asset.lastResultStatus].label.toLowerCase()}

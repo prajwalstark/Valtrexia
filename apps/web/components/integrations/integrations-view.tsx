@@ -1,4 +1,4 @@
-import { brand, getVendor, realVendors, SYNC_INTERVAL_MINUTES } from "@valtrexia/core";
+import { brand, getVendor, realVendors } from "@valtrexia/core";
 import type { IntegrationSummary } from "@valtrexia/db";
 import { ChevronRight } from "lucide-react";
 import Link from "next/link";
@@ -16,19 +16,21 @@ export function IntegrationsView({
   integrations,
   canManage,
   now,
+  syncIntervalMinutes,
   disconnected = false,
 }: {
   integrations: IntegrationSummary[];
   /** Owners can connect, test, replace and disconnect. Technicians can look. */
   canManage: boolean;
   now: Date;
+  syncIntervalMinutes: number;
   disconnected?: boolean;
 }) {
   return (
     <>
       <PageHeader
         title="Integrations"
-        description={`${brand.name} reads backup results from your vendors every ${SYNC_INTERVAL_MINUTES} minutes. Access is read-only: backup jobs are never started, stopped or changed.`}
+        description={`${brand.name} reads backup results from your vendors every ${syncIntervalMinutes} minutes. Access is read-only: backup jobs are never started, stopped or changed.`}
       />
 
       {disconnected ? (
@@ -69,7 +71,12 @@ export function IntegrationsView({
                         .filter((part) => part && part !== integration.name)
                         .join(", ")}
                     </p>
-                    <SyncStatus state={integration} now={now} className="mt-2" />
+                    <SyncStatus
+                      state={integration}
+                      now={now}
+                      syncIntervalMinutes={syncIntervalMinutes}
+                      className="mt-2"
+                    />
                   </div>
                   <ChevronRight
                     aria-hidden="true"

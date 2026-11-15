@@ -3,18 +3,19 @@ import { FleetGrid } from "@/components/fleet/fleet-grid";
 import { FleetView } from "@/components/fleet/fleet-view";
 import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
-import { Notice } from "@/components/ui/notice";
 import type { FleetOverview } from "@/lib/dashboard-core";
 import type { FleetViewMode } from "@/lib/fleet-view";
-import { count } from "@/lib/format";
 import { ClientList } from "./client-list";
 import { FleetSummary } from "./fleet-summary";
+import { IntegrationProblems } from "./integration-problems";
 
 export function DashboardView({
   overview,
+  now,
   fleetViewMode,
 }: {
   overview: FleetOverview;
+  now: Date;
   /** Which fleet view to render first, from the visitor's cookies. */
   fleetViewMode: FleetViewMode;
 }) {
@@ -27,15 +28,7 @@ export function DashboardView({
         description="Every client, ranked by backup health with the worst first."
       />
 
-      {integrations.failing > 0 ? (
-        <Notice kind="error" className="mt-8 max-w-3xl">
-          {count(integrations.failing, "integration")} failing to sync. Backup data for the affected
-          clients may be out of date.{" "}
-          <Link href="/integrations" className="underline underline-offset-4">
-            Check integrations
-          </Link>
-        </Notice>
-      ) : null}
+      <IntegrationProblems integrations={integrations} now={now} className="mt-8 max-w-3xl" />
 
       {clients.length === 0 ? (
         <section className="mt-10 max-w-xl border-l-2 border-iris-dim pl-6">

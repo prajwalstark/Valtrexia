@@ -1,12 +1,20 @@
 import {
+  AuthError,
   ConnectorError,
+  ConnectorUnavailableError,
   createConnector,
+  InvalidCredentialsShapeError,
+  InvalidResponseError,
+  NetworkError,
+  RateLimitError,
+  VendorError,
   type Connector,
   type ConnectorDeps,
   type VendorAsset,
   type VendorResult,
 } from "@valtrexia/connectors";
 import {
+  assessIntegrationHealth,
   deriveCurrentStatus,
   planIncidents,
   RAISED_INCIDENT_TYPES,
@@ -16,6 +24,7 @@ import {
   type BackupStatus,
   type MissedBackupVerdict,
   type RaisedIncidentType,
+  type SyncErrorKind,
   type VendorId,
 } from "@valtrexia/core";
 import {
@@ -114,7 +123,16 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
   const started = await db.withTenant(target.tenantId, async ({ tx }) => {
     const integration = await tx.integration.findUnique({
       where: { id: target.integrationId },
-      select: { id: true, vendor: true, credentialsEnc: true, lastSyncAt: true },
+      select: {
+        id: true,
+        vendor: true,
+        credentialsEnc: true,
+        lastSyncAt: true,
+        createdAt: true,
+        consecutiveFailures: true,
+        failingSince: true,
+        lastSyncErrorKind: true,
+      },
     });
     if (!integration) throw new IntegrationNotFoundError();
     const tenant = await tx.tenant.findUniqueOrThrow({
@@ -427,7 +445,14 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
 
         await tx.integration.update({
           where: { id: integrationId },
-          data: { syncStatus: "ok", lastSyncAt: now, lastSyncError: null },
+          data: {
+            syncStatus: "ok",
+            lastSyncAt: now,
+            lastSyncError: null,
+            lastSyncErrorKind: null,
+            consecutiveFailures: 0,
+            failingSince: null,
+          },
         });
 
         return {
@@ -459,21 +484,78 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
       },
       "sync finished",
     );
+    if (started.integration.consecutiveFailures > 0) {
+      log.info(
+        {
+          failures: started.integration.consecutiveFailures,
+          failingSince: started.integration.failingSince,
+        },
+        "integration recovered",
+      );
+    }
     return summary;
   } catch (error) {
     log.error({ err: error }, "sync failed");
+    const kind = classifyFailure(error);
+    const before = started.integration;
+    const failure = {
+      syncStatus: "error" as const,
+      lastSyncError: describeFailure(error),
+      lastSyncErrorKind: kind,
+      // Only one sync of an integration runs at a time, so the count read at
+      // the start of this one is still the count now.
+      consecutiveFailures: before.consecutiveFailures + 1,
+      failingSince: before.failingSince ?? now,
+    };
     await db
       .withTenant(target.tenantId, ({ tx }) =>
-        tx.integration.update({
-          where: { id: target.integrationId },
-          data: { syncStatus: "error", lastSyncError: describeFailure(error) },
-        }),
+        tx.integration.update({ where: { id: target.integrationId }, data: failure }),
       )
       .catch((secondary: unknown) => {
         log.error({ err: secondary }, "could not record the sync failure");
       });
+
+    const health = (integration: {
+      syncStatus: "running" | "error";
+      consecutiveFailures: number;
+      failingSince: Date | null;
+      lastSyncErrorKind: SyncErrorKind | null;
+    }) =>
+      assessIntegrationHealth({
+        now,
+        lastSyncAt: before.lastSyncAt,
+        createdAt: before.createdAt,
+        syncIntervalMinutes,
+        ...integration,
+      }).state;
+    if (
+      health({ ...before, syncStatus: "running" }) !== "unhealthy" &&
+      health(failure) === "unhealthy"
+    ) {
+      log.warn(
+        { kind, failures: failure.consecutiveFailures, failingSince: failure.failingSince },
+        "integration is unhealthy",
+      );
+    }
     throw error;
   }
+}
+
+/**
+ * What sort of failure this was, for deciding whether retrying can help.
+ * Anything we do not recognize is our own fault until shown otherwise.
+ */
+export function classifyFailure(error: unknown): SyncErrorKind {
+  if (error instanceof AuthError) return "auth";
+  if (error instanceof InvalidCredentialsShapeError || error instanceof DecryptionError) {
+    return "credentials";
+  }
+  if (error instanceof RateLimitError) return "rate_limited";
+  if (error instanceof NetworkError) return "network";
+  if (error instanceof VendorError) return "vendor";
+  if (error instanceof InvalidResponseError) return "invalid_response";
+  if (error instanceof ConnectorUnavailableError) return "unavailable";
+  return "internal";
 }
 
 /**

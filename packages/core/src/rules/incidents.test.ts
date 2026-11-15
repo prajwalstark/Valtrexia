@@ -8,6 +8,12 @@ const OK: MissedBackupVerdict = { state: "ok", deadline: at };
 const MISSED: MissedBackupVerdict = { state: "missed", deadline: at, hoursOverdue: 5 };
 const SUPPRESSED: MissedBackupVerdict = { state: "suppressed", reason: "paused" };
 const INDETERMINATE: MissedBackupVerdict = { state: "indeterminate", reason: "sync_failing" };
+const UNCONFIRMED: MissedBackupVerdict = {
+  state: "unconfirmed",
+  reason: "sync_failing",
+  deadline: at,
+  lastSyncAt: at,
+};
 
 const plan = (
   lastResultStatus: BackupStatus | null,
@@ -64,6 +70,13 @@ describe("planIncidents: missed", () => {
     expect(plan("success", INDETERMINATE, ["missed"])).toEqual({ open: [], close: [] });
     expect(plan("success", INDETERMINATE)).toEqual({ open: [], close: [] });
   });
+
+  it("is neither opened nor closed when the backup is unconfirmed", () => {
+    // The window has closed but we could not look: that is not a missed backup.
+    expect(plan("success", UNCONFIRMED)).toEqual({ open: [], close: [] });
+    expect(plan("success", UNCONFIRMED, ["missed"])).toEqual({ open: [], close: [] });
+    expect(plan("failed", UNCONFIRMED, ["failed", "missed"])).toEqual({ open: [], close: [] });
+  });
 });
 
 describe("planIncidents: both at once", () => {
@@ -106,7 +119,7 @@ describe("planIncidents: assets that are not being watched", () => {
 });
 
 describe("planIncidents: invariants", () => {
-  const verdicts = [OK, MISSED, SUPPRESSED, INDETERMINATE];
+  const verdicts = [OK, MISSED, SUPPRESSED, INDETERMINATE, UNCONFIRMED];
   const openSets: RaisedIncidentType[][] = [[], ["failed"], ["missed"], ["failed", "missed"]];
 
   it("never opens what is open, never closes what is not, never does both to one type", () => {

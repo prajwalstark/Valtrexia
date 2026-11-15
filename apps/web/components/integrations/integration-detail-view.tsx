@@ -18,6 +18,7 @@ export function IntegrationDetailView({
   integration,
   canManage,
   now,
+  syncIntervalMinutes,
   justConnected = false,
   testSlot,
   replaceSlot,
@@ -26,6 +27,7 @@ export function IntegrationDetailView({
   integration: IntegrationSummary;
   canManage: boolean;
   now: Date;
+  syncIntervalMinutes: number;
   justConnected?: boolean;
   testSlot?: ReactNode;
   replaceSlot?: ReactNode;
@@ -62,7 +64,7 @@ export function IntegrationDetailView({
         <dd>{formatDate(integration.createdAt)}</dd>
         <dt className="text-subtle-foreground">Sync</dt>
         <dd>
-          <SyncStatus state={integration} now={now} />
+          <SyncStatus state={integration} now={now} syncIntervalMinutes={syncIntervalMinutes} />
         </dd>
       </dl>
 

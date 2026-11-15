@@ -13,7 +13,11 @@ import { cn } from "@/lib/utils";
  */
 export function Sightline({ overview, now }: { overview: FleetOverview; now: Date }) {
   const { assets, integrations } = overview;
-  const attention = (["failed", "missed", "warning"] as const).filter((s) => assets.counts[s] > 0);
+  // Unknown is listed too: an asset whose backup cannot be confirmed must
+  // never be folded into "all backed up".
+  const attention = (["failed", "missed", "warning", "unknown"] as const).filter(
+    (s) => assets.counts[s] > 0,
+  );
 
   let left;
   if (integrations.total === 0) {
@@ -68,6 +72,16 @@ export function Sightline({ overview, now }: { overview: FleetOverview; now: Dat
       >
         <CircleAlert aria-hidden="true" className="size-4 text-status-critical" />
         {count(integrations.failing, "integration")} failing to sync
+      </Link>
+    ) : integrations.stalled > 0 ? (
+      <Link
+        href="/integrations"
+        className="inline-flex items-center gap-1.5 rounded-md hover:text-foreground"
+      >
+        <CircleAlert aria-hidden="true" className="size-4 text-status-critical" />
+        {integrations.lastSyncAt
+          ? `Syncs have stopped. Last data ${timeAgo(integrations.lastSyncAt, now)}`
+          : "Syncs are not running"}
       </Link>
     ) : integrations.lastSyncAt ? (
       <span>Last synced {timeAgo(integrations.lastSyncAt, now)}</span>

@@ -18,9 +18,20 @@ export {
   type RaisedIncidentType,
 } from "./rules/incidents";
 export {
+  assessIntegrationHealth,
+  ACTION_REQUIRED_ERROR_KINDS,
+  SYNC_ERROR_KINDS,
+  UNHEALTHY_AFTER_FAILURES,
+  type IntegrationHealth,
+  type IntegrationHealthInput,
+  type IntegrationHealthState,
+  type SyncErrorKind,
+} from "./rules/integration-health";
+export {
   deriveCurrentStatus,
   evaluateMissedBackup,
   STALE_SYNC_AFTER_INTERVALS,
+  statusInView,
   type MissedBackupInput,
   type MissedBackupVerdict,
 } from "./rules/missed-backup";
