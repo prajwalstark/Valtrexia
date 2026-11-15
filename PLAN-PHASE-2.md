@@ -1,8 +1,8 @@
 # Phase 2 plan
 
-Status: **awaiting approval.** No Phase 2 code has been written. Branch: `phase-2`, cut from `main` after the Phase 1 merge.
+Status: **approved** ("go with your recommendations"). Branch: `phase-2`, cut from `main` after the Phase 1 merge. Progress is recorded in section 10.
 
-You did not give a scope for Phase 2, so this plan proposes one. Everything here is a recommendation until you approve it. Section 8 lists the decisions I need from you; the first five steps need none of them.
+No scope was given for Phase 2, so this plan proposed one, and it was approved as written. Section 8 records the decisions: the recommendations stand, and four still need an answer from the owner before the step that depends on them.
 
 Phase 1's plan stays in `PLAN.md` as the record of what was built.
 
@@ -186,9 +186,9 @@ Nothing else. Specifically:
 
 One structural note: notification code lives in `apps/worker` (sending) and `packages/core` (pure batching and message-building rules). I am not adding a new package to the monorepo layout you specified.
 
-## 8. Decisions I need from you
+## 8. Decisions
 
-Steps 1 to 6 can start without waiting for answers. Decisions 3, 4 and 11 fall inside those steps; each has a safe default, which I will use unless you say otherwise.
+Approved as recommended. Decisions 1, 2, 6 and 10 cannot be settled by a recommendation alone, because each needs something only the owner has: an email provider account, a cloud, vendor documentation or access, and Clerk keys. They stay **open** until then. Steps 1 to 6 do not depend on them.
 
 | #   | Question                                                                      | My recommendation                                                                                                                                                                    | Needed by |
 | --- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------- |
@@ -212,3 +212,16 @@ So that "tests pass" is not read as more than it is:
 - **Cannot verify without you:** a real email arriving; a real KMS; Clerk; any vendor API; Docker Compose (image pulls are blocked here); the 3D view on a real GPU.
 
 Each step's report will say which of its claims are tested and which are assumed.
+
+## 10. Progress
+
+| #   | Step | State | Notes                                                                                                                                                                     |
+| --- | ---- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | CI   | Done  | First run green on `phase-2`; a deliberately broken branch went red. The run also started Postgres and Redis with Docker Compose, which Phase 1 had never been able to do |
+
+Changes made during the build:
+
+- **CI starts the services with Docker Compose**, not GitHub's service containers, so the workflow exercises the same `docker-compose.yml` and role script a developer uses.
+- **pnpm is installed with Corepack**, which ships with Node, instead of a third-party action.
+- **`pnpm db:check` was added** and runs in CI: it fails when the migrated database and the Prisma schema differ. Phase 2 adds several migrations, and this catches a schema edit without one.
+- **A weekly run was added** to the push trigger, for advisories and for images or actions that change without a commit.

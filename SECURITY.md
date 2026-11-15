@@ -37,7 +37,7 @@ What protects tenant data in this codebase, where each control lives, how it is 
 | Errors do not leak internals                             | Vendor and sync errors use messages we wrote; `app/error.tsx` shows no error text                                                         | Connector and sync tests assert the stored and shown messages                                                          |
 | No secrets in the repository                             | `.env` is ignored; `.env.example` holds placeholders                                                                                      | Tracked files scanned for key patterns at the end of Phase 1                                                           |
 
-Dependencies were audited with `pnpm audit --prod` at the end of Phase 1: no known vulnerabilities.
+Continuous integration runs the type check, lint, every test and a production build on each push, and `pnpm audit --prod` on each push and weekly. The workflow has read-only access to the repository and uses no secrets; its actions are pinned to commits, and a test fails if any of that changes. At the time of writing the audit reports no known vulnerabilities.
 
 ## Not verified
 
@@ -45,7 +45,6 @@ These were built and tested in isolation, but never exercised against the real t
 
 - **Clerk.** Sign-in, MFA setup, organization creation and webhook delivery have not been run against a live Clerk instance. The session and webhook logic is tested with Clerk replaced by fixed inputs.
 - **Datto.** The connector has never called Datto. Its response shapes are assumptions, listed in the README.
-- **Docker Compose.** The file validates, and the role script was run against a local Postgres, but the containers were never started.
 - **The 3D view on a graphics card.** It was only run with software rendering.
 
 ## Open items
@@ -61,8 +60,7 @@ Not built. Each should be settled before production use.
 7. **Retention.** Backup results, raw payloads and audit entries are kept indefinitely.
 8. **Monitoring and alerting** on the application itself: failed syncs across tenants, queue depth, error rates.
 9. **Database backups** of this application's own Postgres.
-10. **Continuous integration.** Tests, lint and the dependency audit are run by hand.
-11. **An independent review.** Nobody other than the author has reviewed this code.
+10. **An independent review.** Nobody other than the author has reviewed this code.
 
 ## Reporting a problem
 

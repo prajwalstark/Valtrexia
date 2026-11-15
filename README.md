@@ -8,12 +8,13 @@ Version 1 is **read-only**. It never starts, stops or changes a backup job.
 
 ## Status
 
-Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and tested. Phase 2 is proposed in [PLAN-PHASE-2.md](./PLAN-PHASE-2.md) and is awaiting approval; none of it is built. It is **not production-ready**. Four things have never been run against the real system they depend on, and several production requirements are not built.
+Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and tested. Phase 2 is under way, following [PLAN-PHASE-2.md](./PLAN-PHASE-2.md): step 1 of 12 (continuous integration) is done. It is **not production-ready**. Three things have never been run against the real system they depend on, and several production requirements are not built.
 
 **What works, verified here:**
 
 - The database layer, tenant isolation, encryption, the missed-backup and incident rules, the sync pipeline and the worker, all tested against a real Postgres and Redis.
 - The whole product end to end on the built-in demo vendor: the worker process syncing, statuses and incidents derived, the dashboard and client pages rendering that data.
+- The setup steps below, from a clean machine: [CI](#continuous-integration) runs them on every push, including starting Postgres and Redis with Docker Compose.
 
 **What has not been verified:**
 
@@ -22,7 +23,6 @@ Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and test
 | Clerk           | Never run against a live instance. Sign-in, MFA setup, organization creation and webhook delivery are untested end to end.      |
 | Signed-in pages | Because of the above, the pages were checked through a temporary preview route with seeded data, not behind a real session.     |
 | Datto BCDR      | The connector has never called Datto. Its response shapes are assumptions; see [Datto BCDR](#datto-bcdr) for the list to check. |
-| Docker Compose  | The file validates and the role script was run against a local Postgres, but the containers were never started.                 |
 | 3D view         | Only run with software rendering, never on a graphics card.                                                                     |
 
 **What is not built:** the production key provider (KMS), the Unitrends and VSPC connectors, notifications, time zones other than UTC, and the items listed in [SECURITY.md](./SECURITY.md).
@@ -392,24 +392,40 @@ The owner role needs `CREATEDB` to run the database tests, which build and drop 
 
 ## Commands
 
-| Command            | What it does                                      |
-| ------------------ | ------------------------------------------------- |
-| `pnpm dev`         | Runs the web app with reload                      |
-| `pnpm build`       | Production build of the web app                   |
-| `pnpm worker:dev`  | Runs the worker with reload                       |
-| `pnpm typecheck`   | Type-checks every package                         |
-| `pnpm lint`        | Lints the repository with ESLint                  |
-| `pnpm test`        | Runs every test once (needs Postgres)             |
-| `pnpm test:unit`   | Runs only the tests that need no services         |
-| `pnpm test:db`     | Runs only the database tests                      |
-| `pnpm test:watch`  | Runs Vitest in watch mode                         |
-| `pnpm format`      | Formats the repository with Prettier              |
-| `pnpm check`       | Type check, lint, tests and format check together |
-| `pnpm infra:up`    | Starts local Postgres and Redis                   |
-| `pnpm infra:down`  | Stops them (data is kept)                         |
-| `pnpm db:migrate`  | Applies pending migrations as the owner role      |
-| `pnpm db:generate` | Regenerates the Prisma client                     |
-| `pnpm db:seed`     | Loads demo data through the real sync pipeline    |
+| Command            | What it does                                                |
+| ------------------ | ----------------------------------------------------------- |
+| `pnpm dev`         | Runs the web app with reload                                |
+| `pnpm build`       | Production build of the web app                             |
+| `pnpm worker:dev`  | Runs the worker with reload                                 |
+| `pnpm typecheck`   | Type-checks every package                                   |
+| `pnpm lint`        | Lints the repository with ESLint                            |
+| `pnpm test`        | Runs every test once (needs Postgres)                       |
+| `pnpm test:unit`   | Runs only the tests that need no services                   |
+| `pnpm test:db`     | Runs only the database tests                                |
+| `pnpm test:watch`  | Runs Vitest in watch mode                                   |
+| `pnpm format`      | Formats the repository with Prettier                        |
+| `pnpm check`       | Type check, lint, tests and format check together           |
+| `pnpm infra:up`    | Starts local Postgres and Redis                             |
+| `pnpm infra:down`  | Stops them (data is kept)                                   |
+| `pnpm db:migrate`  | Applies pending migrations as the owner role                |
+| `pnpm db:check`    | Fails if the migrated database and the Prisma schema differ |
+| `pnpm db:generate` | Regenerates the Prisma client                               |
+| `pnpm db:seed`     | Loads demo data through the real sync pipeline              |
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push, on pull requests from forks, and once a week. It needs no secrets.
+
+| Job              | What it does                                                                                                                                                                               |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Check and build  | The [setup](#setup) steps on a clean runner: install, `.env` from the example, `pnpm infra:up`, `pnpm db:migrate`, `pnpm db:check`, type check, lint, format check, all tests, seed, build |
+| Dependency audit | `pnpm audit --prod`. Separate, so a new advisory is not mistaken for a broken build                                                                                                        |
+
+The weekly run exists because two things can break without a commit: a new advisory against a dependency, and a container image or action changing underneath the workflow.
+
+A test (`packages/core/src/ci-workflow.test.ts`) fails if a workflow uses an action that is not pinned to a commit, asks for more than read access to the repository, refers to a secret, or stops running a step of `pnpm check`.
+
+The build step uses placeholder Clerk keys that identify no Clerk instance. CI therefore proves the app builds, not that sign-in works.
 
 ## Conventions
 
