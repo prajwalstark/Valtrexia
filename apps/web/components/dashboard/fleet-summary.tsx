@@ -1,4 +1,5 @@
 import { HEALTH_LEVELS } from "@valtrexia/core";
+import { ClockAlert } from "lucide-react";
 import { SegmentedBar } from "@/components/status/segmented-bar";
 import { HEALTH_META, STATUS_META } from "@/components/status/status";
 import type { FleetOverview } from "@/lib/dashboard-core";
@@ -46,6 +47,19 @@ export function FleetSummary({ overview }: { overview: FleetOverview }) {
           }
           label="Assets by status"
           parts={assetParts}
+          footnote={
+            overview.assets.pastSla > 0 ? (
+              <>
+                <ClockAlert aria-hidden="true" className="size-4 text-status-critical" />
+                <span>
+                  <span className="font-semibold tabular-nums">{overview.assets.pastSla}</span>{" "}
+                  <span className="text-muted-foreground">
+                    of those past {overview.assets.pastSla === 1 ? "its" : "their"} SLA
+                  </span>
+                </span>
+              </>
+            ) : undefined
+          }
         />
       </div>
     </section>
@@ -57,9 +71,12 @@ function Split({
   note,
   label,
   parts,
+  footnote,
 }: {
   heading: string;
   note?: string | undefined;
+  /** A line under the figures, for something the bar does not show. */
+  footnote?: React.ReactNode;
   label: string;
   parts: {
     key: string;
@@ -87,6 +104,7 @@ function Split({
             </li>
           ))}
       </ul>
+      {footnote ? <p className="mt-2 flex items-center gap-1.5 text-sm">{footnote}</p> : null}
     </div>
   );
 }

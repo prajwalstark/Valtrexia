@@ -19,11 +19,13 @@ import {
   planIncidents,
   RAISED_INCIDENT_TYPES,
   evaluateMissedBackup,
+  evaluateSla,
   isCompletedBackup,
   SYNC_INTERVAL_MINUTES,
   type BackupStatus,
   type MissedBackupVerdict,
   type RaisedIncidentType,
+  type SlaVerdict,
   type SyncErrorKind,
   type VendorId,
 } from "@valtrexia/core";
@@ -72,6 +74,8 @@ export interface SyncTarget {
 export interface AssetVerdict {
   assetId: string;
   verdict: MissedBackupVerdict;
+  /** Whether the asset has gone longer than its SLA without a completed backup. */
+  sla: SlaVerdict;
   currentStatus: BackupStatus;
   /** The latest result as the vendor reported it, before the missed rule. */
   lastResultStatus: BackupStatus | null;
@@ -371,10 +375,11 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
             }
           }
 
-          const verdict = evaluateMissedBackup({
+          const judged = {
             now,
             asset: {
               expectedFrequencyHours: asset.expectedFrequencyHours,
+              slaHours: asset.slaHours,
               firstSeenAt: asset.firstSeenAt,
               lastCompletedAt: lastSuccessAt,
               mutedUntil: asset.mutedUntil,
@@ -383,24 +388,29 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
             },
             graceHours: started.graceHours,
             // This sync has just read the vendor successfully.
-            integration: { syncStatus: "ok", lastSyncAt: now },
+            integration: { syncStatus: "ok" as const, lastSyncAt: now },
             syncIntervalMinutes,
-          });
+          };
+          const verdict = evaluateMissedBackup(judged);
+          const sla = evaluateSla(judged);
           const currentStatus = deriveCurrentStatus(lastResultStatus, verdict);
+          // The moment the SLA was crossed, not the moment we noticed.
+          const staleSince = sla.state === "breached" ? sla.deadline : null;
 
           if (
             currentStatus !== asset.currentStatus ||
             lastResultStatus !== asset.lastResultStatus ||
             lastResultAt?.getTime() !== asset.lastResultAt?.getTime() ||
-            lastSuccessAt?.getTime() !== asset.lastSuccessAt?.getTime()
+            lastSuccessAt?.getTime() !== asset.lastSuccessAt?.getTime() ||
+            staleSince?.getTime() !== asset.staleSince?.getTime()
           ) {
             await tx.asset.update({
               where: { id: asset.id },
-              data: { currentStatus, lastResultStatus, lastResultAt, lastSuccessAt },
+              data: { currentStatus, lastResultStatus, lastResultAt, lastSuccessAt, staleSince },
             });
           }
           statusCounts[currentStatus] += 1;
-          verdicts.push({ assetId: asset.id, verdict, currentStatus, lastResultStatus });
+          verdicts.push({ assetId: asset.id, verdict, sla, currentStatus, lastResultStatus });
         }
 
         // Incidents ...........................................................
@@ -428,6 +438,7 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
           const plan = planIncidents({
             lastResultStatus: entry.lastResultStatus,
             verdict: entry.verdict,
+            sla: entry.sla,
             open: new Set(open?.keys() ?? []),
           });
           for (const type of plan.open) {

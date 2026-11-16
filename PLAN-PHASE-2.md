@@ -215,13 +215,16 @@ Each step's report will say which of its claims are tested and which are assumed
 
 ## 10. Progress
 
-| #   | Step                            | State | Notes                                                                                                                                                                     |
-| --- | ------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | CI                              | Done  | First run green on `phase-2`; a deliberately broken branch went red. The run also started Postgres and Redis with Docker Compose, which Phase 1 had never been able to do |
-| 2   | Vendor data that stops arriving | Done  | Built without the sweep job the plan described; see the first two changes below                                                                                           |
+| #   | Step                                 | State | Notes                                                                                                                                                                     |
+| --- | ------------------------------------ | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | CI                                   | Done  | First run green on `phase-2`; a deliberately broken branch went red. The run also started Postgres and Redis with Docker Compose, which Phase 1 had never been able to do |
+| 2   | Vendor data that stops arriving      | Done  | Built without the sweep job the plan described; see the first two changes below                                                                                           |
+| 3   | Stale/SLA rule and `stale` incidents | Done  | The SLA applied is never shorter than the asset's backup window; see below                                                                                                |
 
 Changes made during the build:
 
+- **The SLA applied to an asset is never shorter than its backup window** (expected frequency plus grace). Section 4.2 did not say this. Every asset has a 72-hour SLA by default, so without it a weekly asset would be reported stale every week while on schedule. It also makes "stale" strictly an escalation of "missed", which a test checks across every combination of settings.
+- **Decision 3 stands:** `stale` and `missed` can be open on one asset together, and in practice always are, because of the rule above.
 - **Step 2 has no sweep job.** Section 4.1 planned a worker job that would write `unknown` onto assets every 15 minutes. That job would run in the worker, and the worker being down is one of the two cases it had to catch, so it could not have caught it. The status is worked out when a page is read instead (`statusInView` in `packages/core`), from the stored status, the asset's window and the integration's last successful sync. It needs no job, no cross-tenant function and no extra write, and it holds when nothing is running. Sync failures are counted where they happen, in the sync job.
 - **Section 1 overstated the gap.** It said that when a sync fails "the integrations page shows the error, but nothing else does". Phase 1 already turned the affected clients amber and put a notice on the dashboard. What was missing, and is now built: the assets themselves kept their last status and stayed in the "backed up" totals; a worker that had stopped was not detected at all; and nothing recorded how long an integration had been failing or whether waiting could fix it.
 - **A stalled state was added** for integrations: nothing failing, nothing arriving. The plan covered failing syncs only.

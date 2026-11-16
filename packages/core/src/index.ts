@@ -32,9 +32,12 @@ export {
   evaluateMissedBackup,
   STALE_SYNC_AFTER_INTERVALS,
   statusInView,
+  vendorDataProblem,
+  watchSuppression,
   type MissedBackupInput,
   type MissedBackupVerdict,
 } from "./rules/missed-backup";
+export { effectiveSlaHours, evaluateSla, type SlaInput, type SlaVerdict } from "./rules/sla";
 export {
   BACKUP_STATUSES,
   isBackupStatus,

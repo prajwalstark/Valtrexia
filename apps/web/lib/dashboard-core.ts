@@ -1,6 +1,7 @@
 import {
   assessIntegrationHealth,
   compareWorstFirst,
+  effectiveSlaHours,
   evaluateMissedBackup,
   HEALTH_LEVELS,
   isWatched,
@@ -53,6 +54,8 @@ export interface ReadDeps {
 const assetTimingSelect = {
   currentStatus: true,
   expectedFrequencyHours: true,
+  slaHours: true,
+  staleSince: true,
   firstSeenAt: true,
   lastSuccessAt: true,
   mutedUntil: true,
@@ -183,7 +186,13 @@ export interface FleetOverview {
   clients: FleetClient[];
   /** How many clients are at each health level. */
   health: Record<Health, number>;
-  assets: { watched: number; excluded: number; counts: Record<BackupStatus, number> };
+  assets: {
+    watched: number;
+    excluded: number;
+    counts: Record<BackupStatus, number>;
+    /** Watched assets that have gone longer than their SLA without a completed backup. */
+    pastSla: number;
+  };
   openIncidents: number;
   integrations: {
     total: number;
@@ -252,7 +261,7 @@ export async function getFleetOverview(
     Health,
     number
   >;
-  const assets = { watched: 0, excluded: 0, counts: emptyCounts() };
+  const assets = { watched: 0, excluded: 0, counts: emptyCounts(), pastSla: 0 };
 
   const rows = clients.map((client): FleetClient => {
     const inView = client.assets.map((asset) => {
@@ -263,6 +272,7 @@ export async function getFleetOverview(
           (unconfirmedByIntegration.get(asset.integrationId) ?? 0) + 1,
         );
       }
+      if (asset.staleSince && isWatched(asset, now)) assets.pastSla += 1;
       return { ...asset, currentStatus: view.status };
     });
     const summary = summarizeClientHealth(inView, {
@@ -407,6 +417,10 @@ export interface ClientAsset {
   lastSuccessAt: Date | null;
   lastResultAt: Date | null;
   expectedFrequencyHours: number;
+  /** The SLA applied to it, in hours: never shorter than its own backup window. */
+  slaHours: number;
+  /** When it went past that SLA without a completed backup. Null while inside it. */
+  staleSince: Date | null;
   /** False when archived, paused or muted: shown, but not counted towards health. */
   watched: boolean;
   isPaused: boolean;
@@ -533,6 +547,8 @@ export async function getClientDetail(
       lastSuccessAt: asset.lastSuccessAt,
       lastResultAt: asset.lastResultAt,
       expectedFrequencyHours: asset.expectedFrequencyHours,
+      slaHours: effectiveSlaHours(asset, clock.graceHours),
+      staleSince: asset.staleSince,
       watched: isWatched(asset, now),
       isPaused: asset.isPaused,
       isArchived: asset.isArchived,

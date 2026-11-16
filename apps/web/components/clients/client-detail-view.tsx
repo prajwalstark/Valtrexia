@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronLeft } from "lucide-react";
+import { ChevronDown, ChevronLeft, ClockAlert } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { PageHeader } from "@/components/shell/page-header";
@@ -10,14 +10,14 @@ import {
   type OpenIncident,
 } from "@/lib/dashboard-core";
 import { describeClient } from "@/lib/describe";
-import { count, formatDate, formatDateTime, timeAgo } from "@/lib/format";
+import { count, elapsed, formatDate, formatDateTime, timeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { DayStrip, DayStripLegend } from "./day-strip";
 
 const INCIDENT_LABEL: Record<OpenIncident["type"], string> = {
   failed: "Backup failed",
   missed: "Backup missed",
-  stale: "Backup overdue",
+  stale: "SLA breached",
 };
 
 export function ClientDetailView({
@@ -57,7 +57,10 @@ export function ClientDetailView({
           </h2>
           <ul className="mt-4 divide-y divide-line border-y border-line">
             {client.openIncidents.map((incident) => {
-              const meta = STATUS_META[incident.type === "failed" ? "failed" : "missed"];
+              const meta =
+                incident.type === "stale"
+                  ? { icon: ClockAlert, tone: "text-status-critical" }
+                  : STATUS_META[incident.type];
               const Icon = meta.icon;
               return (
                 <li
@@ -166,6 +169,15 @@ function AssetRow({ asset, now }: { asset: ClientAsset; now: Date }) {
             {asset.lastSuccessAt
               ? `Last backup ${timeAgo(asset.lastSuccessAt, now)}`
               : "Never backed up"}
+            {asset.staleSince ? (
+              <span className="flex items-start gap-1 text-foreground">
+                <ClockAlert
+                  aria-hidden="true"
+                  className="mt-[3px] size-3.5 shrink-0 text-status-critical"
+                />
+                {elapsed(asset.staleSince, now)} past its {asset.slaHours}-hour SLA
+              </span>
+            ) : null}
             {asset.unconfirmedSince ? (
               <span className="block text-subtle-foreground">
                 No vendor data since {formatDateTime(asset.unconfirmedSince)}

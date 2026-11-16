@@ -70,7 +70,7 @@ enum SyncErrorKind {
 enum IncidentType {
   failed
   missed
-  /// Reserved for the SLA rule; not raised in Phase 1.
+  /// Longer than the asset's SLA without a completed backup.
   stale
 
   @@map("incident_type")
@@ -234,6 +234,8 @@ model Asset {
   /// When the last completed backup finished. A warning counts as completed.
   lastSuccessAt          DateTime?     @map("last_success_at") @db.Timestamptz(3)
   currentStatus          BackupStatus  @default(unknown) @map("current_status")
+  /// When the asset went past its SLA without a completed backup. Null while inside it.
+  staleSince             DateTime?     @map("stale_since") @db.Timestamptz(3)
   createdAt              DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt              DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 

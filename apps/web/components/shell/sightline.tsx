@@ -1,5 +1,5 @@
 import { SYNC_INTERVAL_MINUTES } from "@valtrexia/core";
-import { CircleAlert, CircleCheck, CircleDashed } from "lucide-react";
+import { CircleAlert, CircleCheck, CircleDashed, ClockAlert } from "lucide-react";
 import Link from "next/link";
 import { STATUS_META } from "@/components/status/status";
 import type { FleetOverview } from "@/lib/dashboard-core";
@@ -60,6 +60,13 @@ export function Sightline({ overview, now }: { overview: FleetOverview; now: Dat
           );
         })}
         <li className="text-subtle-foreground">of {count(assets.watched, "asset")}</li>
+        {assets.pastSla > 0 ? (
+          <li className="inline-flex items-center gap-1.5">
+            <ClockAlert aria-hidden="true" className="size-4 text-status-critical" />
+            <span className="font-semibold tabular-nums">{assets.pastSla}</span>
+            <span className="text-muted-foreground">past SLA</span>
+          </li>
+        ) : null}
       </ul>
     );
   }

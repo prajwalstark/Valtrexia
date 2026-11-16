@@ -248,6 +248,161 @@ describe("incidents: missed backups", () => {
   });
 });
 
+describe("incidents: stale backups (the SLA)", () => {
+  const staleSince = (tenantId: string, name: string) =>
+    db.withTenant(
+      tenantId,
+      async ({ tx }) => (await tx.asset.findFirstOrThrow({ where: { name } })).staleSince,
+    );
+
+  it("opens once an asset has gone longer than its SLA without a backup, and closes when one arrives", async () => {
+    // Default SLA: 72 hours. Last backup two hours before T0.
+    const vendor = new ScriptedVendor().result("FS01", at(-2), "success");
+    const { tenantId, sync, incidents, open } = await setup(vendor);
+    await sync(T0);
+    await sync(at(25));
+    expect(await open()).toEqual(["FS01:missed"]);
+    expect(await staleSince(tenantId, "FS01")).toBeNull();
+
+    // 72 hours after the backup is T0 + 70.
+    await sync(at(70));
+    expect(await open()).toEqual(["FS01:missed"]);
+    await sync(at(71));
+    expect(await open()).toEqual(["FS01:missed", "FS01:stale"]);
+    // The moment the SLA was crossed, not the moment a sync noticed.
+    expect(await staleSince(tenantId, "FS01")).toEqual(at(70));
+
+    vendor.result("FS01", at(72), "success");
+    const summary = await sync(at(73));
+    expect(summary).toMatchObject({ incidentsOpened: 0, incidentsClosed: 2 });
+    expect(await incidents()).toMatchObject([
+      { type: "missed", openedAt: at(25), closedAt: at(73) },
+      { type: "stale", openedAt: at(71), closedAt: at(73) },
+    ]);
+    expect(await staleSince(tenantId, "FS01")).toBeNull();
+  });
+
+  it("escalates an asset that fails every night: failed, then missed, then stale", async () => {
+    const vendor = new ScriptedVendor().result("SQL01", at(-12), "success");
+    const { sync, open } = await setup(vendor);
+    await sync(T0);
+    expect(await open()).toEqual([]);
+
+    vendor.result("SQL01", at(12), "failed");
+    await sync(at(13));
+    expect(await open()).toEqual(["SQL01:failed"]);
+
+    vendor.result("SQL01", at(36), "failed");
+    await sync(at(37));
+    expect((await open()).sort()).toEqual(["SQL01:failed", "SQL01:missed"]);
+
+    // Attempts keep happening, and keep failing. 72 hours after the last good
+    // backup is T0 + 60.
+    vendor.result("SQL01", at(60), "failed");
+    await sync(at(61));
+    expect((await open()).sort()).toEqual(["SQL01:failed", "SQL01:missed", "SQL01:stale"]);
+
+    // A warning is still a completed backup: everything closes.
+    vendor.result("SQL01", at(84), "warning");
+    await sync(at(85));
+    expect(await open()).toEqual([]);
+  });
+
+  it("measures an asset that has never been backed up from when it was first seen", async () => {
+    const vendor = new ScriptedVendor().asset("NEW01");
+    const { sync, open } = await setup(vendor);
+    await sync(T0);
+    await sync(at(72));
+    expect(await open()).toEqual(["NEW01:missed"]);
+    await sync(at(73));
+    expect((await open()).sort()).toEqual(["NEW01:missed", "NEW01:stale"]);
+  });
+
+  it("uses the SLA a technician has set", async () => {
+    const vendor = new ScriptedVendor().result("A", at(-2), "success");
+    const { tenantId, sync, open } = await setup(vendor);
+    await sync(T0);
+    await db.withTenant(tenantId, ({ tx }) =>
+      tx.asset.updateMany({ where: { name: "A" }, data: { slaHours: 48 } }),
+    );
+    await sync(at(45));
+    expect(await open()).toEqual(["A:missed"]);
+    await sync(at(47));
+    expect((await open()).sort()).toEqual(["A:missed", "A:stale"]);
+  });
+
+  it("never calls a weekly asset stale before it has also missed a backup", async () => {
+    const vendor = new ScriptedVendor().result("ARCHIVE", at(-2), "success");
+    const { tenantId, sync, open } = await setup(vendor);
+    await sync(T0);
+    // Backed up weekly; the SLA is left at its 72-hour default.
+    await db.withTenant(tenantId, ({ tx }) =>
+      tx.asset.updateMany({ where: { name: "ARCHIVE" }, data: { expectedFrequencyHours: 168 } }),
+    );
+
+    await sync(at(100));
+    expect(await open()).toEqual([]);
+
+    // 168 hours + 2 hours of grace after the backup is T0 + 168.
+    await sync(at(167));
+    expect(await open()).toEqual([]);
+    await sync(at(169));
+    expect((await open()).sort()).toEqual(["ARCHIVE:missed", "ARCHIVE:stale"]);
+  });
+
+  it("closes when the asset is muted and reopens when the mute ends, still stale", async () => {
+    const vendor = new ScriptedVendor().result("A", at(-100), "success");
+    const { tenantId, sync, open, incidents } = await setup(vendor);
+    await sync(T0);
+    expect((await open()).sort()).toEqual(["A:missed", "A:stale"]);
+
+    await db.withTenant(tenantId, ({ tx }) =>
+      tx.asset.updateMany({ where: { name: "A" }, data: { mutedUntil: at(10) } }),
+    );
+    await sync(at(1));
+    expect(await open()).toEqual([]);
+    expect(await staleSince(tenantId, "A")).toBeNull();
+
+    await sync(at(11));
+    expect((await open()).sort()).toEqual(["A:missed", "A:stale"]);
+    expect(await staleSince(tenantId, "A")).toEqual(at(-28));
+    expect(await incidents()).toHaveLength(4);
+  });
+
+  it("is neither opened nor closed while the vendor cannot be reached", async () => {
+    const vendor = new ScriptedVendor()
+      .result("OLD", at(-100), "success")
+      .result("RECENT", at(-2), "success");
+    const { tenantId, sync, open } = await setup(vendor);
+    await sync(T0);
+    expect((await open()).sort()).toEqual(["OLD:missed", "OLD:stale"]);
+
+    // Four days of outage. RECENT is now past its SLA as far as we know, and
+    // OLD may have been backed up: neither can be said.
+    vendor.down = true;
+    for (const hours of [24, 48, 96])
+      await expect(sync(at(hours))).rejects.toThrow("vendor is down");
+    expect((await open()).sort()).toEqual(["OLD:missed", "OLD:stale"]);
+    expect(await staleSince(tenantId, "RECENT")).toBeNull();
+
+    vendor.down = false;
+    vendor.result("OLD", at(95), "success");
+    await sync(at(97));
+    expect((await open()).sort()).toEqual(["RECENT:missed", "RECENT:stale"]);
+  });
+
+  it("running the same sync twice opens nothing more", async () => {
+    const vendor = new ScriptedVendor().result("A", at(-100), "success");
+    const { sync, incidents } = await setup(vendor);
+    await sync(T0);
+    const first = await incidents();
+    expect(first.map((i) => i.type).sort()).toEqual(["missed", "stale"]);
+
+    expect(await sync(T0)).toMatchObject({ incidentsOpened: 0, incidentsClosed: 0 });
+    expect(await incidents()).toEqual(first);
+  });
+});
+
 describe("incidents: assets that stop being watched", () => {
   it("closes open incidents when an asset is paused or archived at the vendor", async () => {
     const vendor = new ScriptedVendor()

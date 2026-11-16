@@ -8,7 +8,7 @@ Version 1 is **read-only**. It never starts, stops or changes a backup job.
 
 ## Status
 
-Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and tested. Phase 2 is under way, following [PLAN-PHASE-2.md](./PLAN-PHASE-2.md): steps 1 and 2 of 12 are done (continuous integration; handling of vendor data that stops arriving). It is **not production-ready**. Three things have never been run against the real system they depend on, and several production requirements are not built.
+Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and tested. Phase 2 is under way, following [PLAN-PHASE-2.md](./PLAN-PHASE-2.md): steps 1 to 3 of 12 are done (continuous integration; handling of vendor data that stops arriving; the stale-backup rule). It is **not production-ready**. Three things have never been run against the real system they depend on, and several production requirements are not built.
 
 **What works, verified here:**
 
@@ -150,7 +150,7 @@ The app works without the webhook, since sign-in creates whatever is missing. Th
 
 ## Dashboard
 
-**Status strip.** Across the top of every page: how many watched assets have failed, been missed, warned or cannot be confirmed right now, and when data was last synced. If an integration is failing to sync, or syncs have stopped altogether, it says so there.
+**Status strip.** Across the top of every page: how many watched assets have failed, been missed, warned or cannot be confirmed right now, how many are past their SLA, and when data was last synced. If an integration is failing to sync, or syncs have stopped altogether, it says so there.
 
 **Integration problems.** When a vendor's data cannot be relied on, the dashboard says so above everything else, one line per integration: how long it has been failing and why, or since when nothing has arrived, and how many assets that leaves unconfirmed. A rejected key links straight to replacing it. If every integration has gone quiet at once, it says the background worker may not be running. See [When vendor data stops arriving](#when-vendor-data-stops-arriving).
 
@@ -305,19 +305,20 @@ Finding what is due is the system's one cross-tenant read. It goes through a SQL
 
 An incident is a problem with one asset that stays open until it resolves, so a technician sees one item per problem rather than one per failed attempt. Incidents are opened and closed inside the same transaction as the statuses they follow from, by `planIncidents` in `packages/core`.
 
-| Type     | Opens when                                 | Closes when                             |
-| -------- | ------------------------------------------ | --------------------------------------- |
-| `failed` | The latest result failed                   | A backup completes (success or warning) |
-| `missed` | The missed-backup rule says one was missed | A backup is back inside its window      |
-| either   |                                            | The asset is archived, paused or muted  |
+| Type     | Opens when                                                        | Closes when                             |
+| -------- | ----------------------------------------------------------------- | --------------------------------------- |
+| `failed` | The latest result failed                                          | A backup completes (success or warning) |
+| `missed` | The missed-backup rule says one was missed                        | A backup is back inside its window      |
+| `stale`  | The asset has gone longer than its SLA without a completed backup | A backup completes                      |
+| any      |                                                                   | The asset is archived, paused or muted  |
 
 - A `failed` incident stays open while a retry is running or its outcome is unreadable.
 - A failed sync opens and closes nothing: with the vendor unreachable, neither a missed backup nor a recovery can be known.
-- An asset whose backups fail for days has both: the latest attempt failed, and none completed in time.
+- An asset whose backups fail for days collects all three, each as its own line is crossed: the latest attempt failed, none completed in time, and it has now gone longer than its SLA without one. A completed backup closes all three together.
 - At most one incident of each type is open per asset, enforced by a database index.
 - Who acknowledged an incident is kept after it closes. A new failure after a closure is a new incident.
 
-Incidents are in-app only in Phase 1. Sending them anywhere (email, a PSA) is not built.
+Incidents are in-app only so far. Sending them anywhere (email, a webhook) is planned in [PLAN-PHASE-2.md](./PLAN-PHASE-2.md) and not built.
 
 ## How backup health is decided
 
@@ -336,6 +337,15 @@ The logic is pure functions in `packages/core`, with no database or network acce
 | `unconfirmed`   | The vendor data is out of date, and the window has closed since                        | Leave it as it is                  |
 
 Vendor data is out of date when the integration has never synced, its sync is failing, or its last successful sync is more than three sync intervals old (45 minutes by default). The last two verdicts exist so that a vendor outage does not raise a missed-backup incident on every asset that vendor protects.
+
+**Stale backups** (`evaluateSla`). A different question from the missed-backup rule's. That one asks whether the latest expected backup happened. This one asks how long the asset has now been without any good backup, whatever the reason: three days of nightly failures count the same as three days of silence. Each asset has an SLA in hours (72 by default). When its last completed backup, or its discovery if it has never had one, is longer ago than that, a `stale` incident opens and the asset is marked as past its SLA, from the moment the SLA was crossed.
+
+Two rules keep it from misfiring:
+
+- **The SLA applied is never shorter than the asset's own backup window** (expected frequency plus grace). An asset backed up weekly cannot honour a 72-hour SLA, and would otherwise be reported stale every week while doing exactly what it is scheduled to do. So a stale backup is always also a missed one: stale is the escalation of missed and never fires before it. The client page shows the SLA that was applied.
+- **It is never judged on out-of-date data**, and not at all for an asset that is archived, paused or muted, exactly as with the missed-backup rule.
+
+"Stale" is an incident type and a marker on the asset, not a seventh status. An asset past its SLA is shown as `failed` or `missed`, with how long it has been past its SLA beside it.
 
 ### When vendor data stops arriving
 

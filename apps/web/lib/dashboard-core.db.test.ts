@@ -38,6 +38,9 @@ interface AssetSpec {
   /** Hours since it was first seen. Unset: seen just now. */
   firstSeenHoursAgo?: number;
   frequencyHours?: number;
+  slaHours?: number;
+  /** Hours since it went past its SLA, as the sync job would have recorded. */
+  staleHoursAgo?: number;
   /** [hours ago, status] for each result to store. */
   results?: [number, BackupStatus][];
   /** Open incident types to create for it. */
@@ -123,6 +126,8 @@ async function tenant(
             lastSuccessAt:
               spec.lastBackupHoursAgo === undefined ? null : ago(spec.lastBackupHoursAgo * HOUR),
             ...(spec.frequencyHours ? { expectedFrequencyHours: spec.frequencyHours } : {}),
+            ...(spec.slaHours ? { slaHours: spec.slaHours } : {}),
+            staleSince: spec.staleHoursAgo === undefined ? null : ago(spec.staleHoursAgo * HOUR),
           },
         });
         assetIds[spec.name] = asset.id;
@@ -262,6 +267,7 @@ describe("getFleetOverview", () => {
       watched: 8,
       excluded: 1,
       counts: { success: 3, warning: 1, failed: 2, missed: 1, running: 1, unknown: 0 },
+      pastSla: 0,
     });
   });
 
@@ -334,6 +340,7 @@ describe("getFleetOverview", () => {
       watched: 6,
       excluded: 1,
       counts: { success: 1, warning: 1, failed: 1, missed: 1, running: 0, unknown: 2 },
+      pastSla: 0,
     });
     expect(overview.clients[0]!.summary).toMatchObject({ health: "red", affected: 2 });
     expect(overview.integrations).toEqual({
@@ -483,6 +490,21 @@ describe("getFleetOverview", () => {
     expect(hourly.integrations).toMatchObject({ stalled: 0, problems: [] });
   });
 
+  it("counts watched assets that are past their SLA", async () => {
+    const { session } = await tenant({
+      "Late Co": [
+        { name: "stale-missed", status: "missed", lastBackupHoursAgo: 100, staleHoursAgo: 28 },
+        { name: "stale-failed", status: "failed", lastBackupHoursAgo: 90, staleHoursAgo: 18 },
+        { name: "missed-only", status: "missed", lastBackupHoursAgo: 40 },
+        // Past its SLA when it was paused; not being watched, so not counted.
+        { name: "paused", status: "missed", staleHoursAgo: 200, paused: true },
+      ],
+      "Fine Co": [{ name: "ok", status: "success", lastBackupHoursAgo: 3 }],
+    });
+    const overview = await getFleetOverview({ db }, session, NOW);
+    expect(overview.assets).toMatchObject({ watched: 4, excluded: 1, pastSla: 2 });
+  });
+
   it("counts open incidents per client and in total, ignoring closed ones", async () => {
     const { session, incidentIds } = await tenant({
       "One Co": [{ name: "a", status: "failed", incidents: ["failed", "missed"] }],
@@ -538,6 +560,7 @@ describe("getFleetOverview", () => {
         watched: 0,
         excluded: 0,
         counts: { success: 0, warning: 0, failed: 0, missed: 0, running: 0, unknown: 0 },
+        pastSla: 0,
       },
       openIncidents: 0,
       integrations: {
@@ -645,6 +668,45 @@ describe("getClientDetail", () => {
       ["daily", "success", null],
       ["weekly", "success", null],
     ]);
+  });
+
+  it("says which assets are past their SLA, since when, and what SLA was applied", async () => {
+    const { session, clientIds } = await tenant({
+      "Late Co": [
+        { name: "daily", status: "missed", lastBackupHoursAgo: 100, staleHoursAgo: 28 },
+        { name: "tight", status: "success", lastBackupHoursAgo: 3, slaHours: 12 },
+        { name: "weekly", status: "success", lastBackupHoursAgo: 3, frequencyHours: 168 },
+      ],
+    });
+    const detail = (await getClientDetail({ db }, session, clientIds["Late Co"]!, NOW))!;
+    expect(
+      Object.fromEntries(detail.assets.map((a) => [a.name, [a.slaHours, a.staleSince]])),
+    ).toEqual({
+      daily: [72, ago(28 * HOUR)],
+      // A 12-hour SLA on a daily asset is applied as its 26-hour window.
+      tight: [26, null],
+      // 72 hours on a weekly asset is applied as 168 hours plus 2 of grace.
+      weekly: [170, null],
+    });
+  });
+
+  it("lists a stale incident alongside the others", async () => {
+    const { session, clientIds, assetIds } = await tenant({
+      "Late Co": [{ name: "sql", status: "failed", incidents: ["failed", "missed"] }],
+    });
+    await db.withTenant(session.tenantId, ({ tx }) =>
+      tx.incident.create({
+        data: {
+          tenantId: session.tenantId,
+          assetId: assetIds.sql!,
+          type: "stale",
+          openedAt: ago(HOUR),
+        },
+      }),
+    );
+    const detail = (await getClientDetail({ db }, session, clientIds["Late Co"]!, NOW))!;
+    expect(detail.openIncidents.map((i) => i.type).sort()).toEqual(["failed", "missed", "stale"]);
+    expect(detail.openIncidents.every((i) => i.assetName === "sql")).toBe(true);
   });
 
   it("gives each asset a 14-day strip and its results, newest first", async () => {

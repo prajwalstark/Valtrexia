@@ -1,12 +1,10 @@
 import type { BackupStatus } from "../status";
 import { isCompletedBackup } from "../status";
 import type { MissedBackupVerdict } from "./missed-backup";
+import type { SlaVerdict } from "./sla";
 
-/**
- * Incident types raised in Phase 1. `stale` exists in the database enum for
- * the SLA rule and is not raised yet.
- */
-export const RAISED_INCIDENT_TYPES = ["failed", "missed"] as const;
+/** Every incident type, in the order they are planned and listed. */
+export const RAISED_INCIDENT_TYPES = ["failed", "missed", "stale"] as const;
 export type RaisedIncidentType = (typeof RAISED_INCIDENT_TYPES)[number];
 
 export interface IncidentInput {
@@ -14,6 +12,8 @@ export interface IncidentInput {
   lastResultStatus: BackupStatus | null;
   /** What the missed-backup rule concluded in this sync. */
   verdict: MissedBackupVerdict;
+  /** What the SLA rule concluded in this sync. */
+  sla: SlaVerdict;
   /** Types that already have an open incident for this asset. */
   open: ReadonlySet<RaisedIncidentType>;
 }
@@ -46,8 +46,13 @@ type Action = "open" | "close" | "leave";
  *   and an asset that is archived, paused or muted has its incident closed,
  *     whatever its last result, because it is not being watched.
  *
- * The two are independent. An asset whose backups fail for days has both: the
- * latest attempt failed, and no backup has completed in time.
+ * `stale` follows the SLA verdict:
+ *   breached -> open; ok -> close; suppressed -> close; indeterminate -> leave.
+ *
+ * The three are independent. An asset whose backups fail for days has all of
+ * them: the latest attempt failed, no backup completed in time, and it has
+ * now been without one for longer than its SLA. Each closes for its own
+ * reason, though a completed backup closes all three at once.
  */
 export function planIncidents(input: IncidentInput): IncidentPlan {
   const suppressed = input.verdict.state === "suppressed";
@@ -66,10 +71,18 @@ export function planIncidents(input: IncidentInput): IncidentPlan {
     failed = "close";
   } else failed = "leave";
 
+  const stale: Action =
+    input.sla.state === "breached"
+      ? "open"
+      : input.sla.state === "indeterminate"
+        ? "leave"
+        : "close";
+
   const plan: IncidentPlan = { open: [], close: [] };
   for (const [type, action] of [
     ["failed", failed],
     ["missed", missed],
+    ["stale", stale],
   ] as const) {
     const isOpen = input.open.has(type);
     if (action === "open" && !isOpen) plan.open.push(type);

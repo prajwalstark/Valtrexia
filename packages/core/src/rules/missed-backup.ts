@@ -7,6 +7,36 @@ const MINUTE_MS = 60 * 1000;
 /** A sync is trusted for this many sync intervals after it last succeeded. */
 export const STALE_SYNC_AFTER_INTERVALS = 3;
 
+/** Why an asset is deliberately not being judged, or null if it is being watched. */
+export function watchSuppression(
+  asset: { mutedUntil: Date | null; isPaused: boolean; isArchived: boolean },
+  now: Date,
+): "archived" | "paused" | "muted" | null {
+  if (asset.isArchived) return "archived";
+  if (asset.isPaused) return "paused";
+  if (asset.mutedUntil && asset.mutedUntil.getTime() > now.getTime()) return "muted";
+  return null;
+}
+
+/**
+ * Why an integration's data is too old to judge an asset by, or null if it is
+ * current. Shared by every rule that reasons from the absence of a backup:
+ * absence proves nothing when we have not been able to look.
+ */
+export function vendorDataProblem(
+  integration: { syncStatus: "never" | "running" | "ok" | "error"; lastSyncAt: Date | null },
+  now: Date,
+  syncIntervalMinutes: number,
+): "never_synced" | "sync_failing" | "sync_stale" | null {
+  if (!(syncIntervalMinutes > 0) || !Number.isFinite(syncIntervalMinutes)) {
+    throw new RangeError("syncIntervalMinutes must be a positive number");
+  }
+  if (integration.lastSyncAt === null) return "never_synced";
+  if (integration.syncStatus === "error") return "sync_failing";
+  const staleAfterMs = STALE_SYNC_AFTER_INTERVALS * syncIntervalMinutes * MINUTE_MS;
+  return now.getTime() - integration.lastSyncAt.getTime() > staleAfterMs ? "sync_stale" : null;
+}
+
 export interface MissedBackupInput {
   now: Date;
   asset: {
@@ -80,17 +110,14 @@ export function evaluateMissedBackup(input: MissedBackupInput): MissedBackupVerd
   if (!(graceHours >= 0) || !Number.isFinite(graceHours)) {
     throw new RangeError("graceHours must be zero or a positive number");
   }
-  if (!(syncIntervalMinutes > 0) || !Number.isFinite(syncIntervalMinutes)) {
-    throw new RangeError("syncIntervalMinutes must be a positive number");
-  }
+  const outOfDate = vendorDataProblem(integration, now, syncIntervalMinutes);
 
-  if (asset.isArchived) return { state: "suppressed", reason: "archived" };
-  if (asset.isPaused) return { state: "suppressed", reason: "paused" };
-  if (asset.mutedUntil && asset.mutedUntil.getTime() > now.getTime()) {
-    return { state: "suppressed", reason: "muted" };
-  }
+  const suppressed = watchSuppression(asset, now);
+  if (suppressed) return { state: "suppressed", reason: suppressed };
 
-  if (integration.lastSyncAt === null) return { state: "indeterminate", reason: "never_synced" };
+  if (outOfDate === "never_synced" || integration.lastSyncAt === null) {
+    return { state: "indeterminate", reason: "never_synced" };
+  }
 
   const reference = asset.lastCompletedAt ?? asset.firstSeenAt;
   const deadline = new Date(
@@ -98,13 +125,6 @@ export function evaluateMissedBackup(input: MissedBackupInput): MissedBackupVerd
   );
   const overdueMs = now.getTime() - deadline.getTime();
 
-  const staleAfterMs = STALE_SYNC_AFTER_INTERVALS * syncIntervalMinutes * MINUTE_MS;
-  const outOfDate: "sync_failing" | "sync_stale" | null =
-    integration.syncStatus === "error"
-      ? "sync_failing"
-      : now.getTime() - integration.lastSyncAt.getTime() > staleAfterMs
-        ? "sync_stale"
-        : null;
   if (outOfDate) {
     return overdueMs > 0
       ? { state: "unconfirmed", reason: outOfDate, deadline, lastSyncAt: integration.lastSyncAt }
