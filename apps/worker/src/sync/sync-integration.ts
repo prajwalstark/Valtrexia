@@ -15,6 +15,7 @@ import {
 } from "@valtrexia/connectors";
 import {
   assessIntegrationHealth,
+  clampAssetHours,
   deriveCurrentStatus,
   planIncidents,
   RAISED_INCIDENT_TYPES,
@@ -250,7 +251,8 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
               isArchived: a.isArchived,
               // Set once, from the vendor's schedule when it reports one.
               // After that the value belongs to the MSP, who may tune it.
-              expectedFrequencyHours: a.expectedFrequencyHours ?? 24,
+              expectedFrequencyHours:
+                a.expectedFrequencyHours === null ? 24 : clampAssetHours(a.expectedFrequencyHours),
               firstSeenAt: now,
               lastSeenAt: now,
             })),

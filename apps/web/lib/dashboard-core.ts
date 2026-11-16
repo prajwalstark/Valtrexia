@@ -4,6 +4,7 @@ import {
   effectiveSlaHours,
   evaluateMissedBackup,
   HEALTH_LEVELS,
+  isMutedIndefinitely,
   isWatched,
   statusInView,
   statusSeverity,
@@ -398,6 +399,15 @@ export interface OpenIncident {
   acknowledgedBy: string | null;
 }
 
+export interface AssetMute {
+  /** When it ends. Null for a mute with no end date. */
+  until: Date | null;
+  reason: string | null;
+  /** Their name, or their email if they have no name. */
+  by: string | null;
+  at: Date | null;
+}
+
 export interface ClientAsset {
   id: string;
   name: string;
@@ -419,6 +429,8 @@ export interface ClientAsset {
   expectedFrequencyHours: number;
   /** The SLA applied to it, in hours: never shorter than its own backup window. */
   slaHours: number;
+  /** The SLA as someone set it, which may be shorter than the one applied. */
+  configuredSlaHours: number;
   /** When it went past that SLA without a completed backup. Null while inside it. */
   staleSince: Date | null;
   /** False when archived, paused or muted: shown, but not counted towards health. */
@@ -426,6 +438,8 @@ export interface ClientAsset {
   isPaused: boolean;
   isArchived: boolean;
   mutedUntil: Date | null;
+  /** The mute in force now, if there is one: who set it, when and why. */
+  mute: AssetMute | null;
   days: AssetDay[];
   /** The most recent results, newest first, at most RESULTS_PER_ASSET. */
   results: AssetResult[];
@@ -439,6 +453,10 @@ export interface ClientDetail {
   summary: ClientHealth;
   /** Watched assets worst first, then the ones that are not watched. */
   assets: ClientAsset[];
+  /** Assets a change "for all assets" would apply to: those not archived. */
+  settableAssets: number;
+  /** How many of those are muted now. */
+  mutedAssets: number;
   openIncidents: OpenIncident[];
 }
 
@@ -471,6 +489,9 @@ export async function getClientDetail(
             ...assetTimingSelect,
             lastResultStatus: true,
             lastResultAt: true,
+            mutedReason: true,
+            mutedAt: true,
+            mutedBy: { select: { name: true, email: true } },
             integrationId: true,
             integration: { select: integrationHealthSelect },
           },
@@ -534,6 +555,7 @@ export async function getClientDetail(
   const assets = client.assets.map((asset): ClientAsset => {
     const own = resultsByAsset.get(asset.id) ?? [];
     const view = views.get(asset.id)!;
+    const muted = asset.mutedUntil !== null && asset.mutedUntil.getTime() > now.getTime();
     return {
       id: asset.id,
       name: asset.name,
@@ -548,11 +570,20 @@ export async function getClientDetail(
       lastResultAt: asset.lastResultAt,
       expectedFrequencyHours: asset.expectedFrequencyHours,
       slaHours: effectiveSlaHours(asset, clock.graceHours),
+      configuredSlaHours: asset.slaHours,
       staleSince: asset.staleSince,
       watched: isWatched(asset, now),
       isPaused: asset.isPaused,
       isArchived: asset.isArchived,
       mutedUntil: asset.mutedUntil,
+      mute: muted
+        ? {
+            until: isMutedIndefinitely(asset.mutedUntil) ? null : asset.mutedUntil,
+            reason: asset.mutedReason,
+            by: asset.mutedBy ? asset.mutedBy.name || asset.mutedBy.email : null,
+            at: asset.mutedAt,
+          }
+        : null,
       days: buildDayStrip(own, now),
       results: own.slice(0, RESULTS_PER_ASSET).map((r) => ({
         id: r.id,
@@ -588,6 +619,8 @@ export async function getClientDetail(
       },
     ),
     assets,
+    settableAssets: assets.filter((asset) => !asset.isArchived).length,
+    mutedAssets: assets.filter((asset) => !asset.isArchived && asset.mute !== null).length,
     openIncidents: incidents.map((incident) => ({
       id: incident.id,
       type: incident.type,

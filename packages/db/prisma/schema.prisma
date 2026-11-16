@@ -127,6 +127,7 @@ model User {
 
   tenant                Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   acknowledgedIncidents Incident[]
+  mutedAssets           Asset[]
   auditLogs             AuditLog[]
 
   @@unique([tenantId, clerkUserId])
@@ -221,6 +222,10 @@ model Asset {
   expectedFrequencyHours Int           @default(24) @map("expected_frequency_hours")
   slaHours               Int           @default(72) @map("sla_hours")
   mutedUntil             DateTime?     @map("muted_until") @db.Timestamptz(3)
+  /// Why it was muted, in the words of whoever muted it. Kept while the mute stands.
+  mutedReason            String?       @map("muted_reason")
+  mutedByUserId          String?       @map("muted_by_user_id") @db.Uuid
+  mutedAt                DateTime?     @map("muted_at") @db.Timestamptz(3)
   isPaused               Boolean       @default(false) @map("is_paused")
   isArchived             Boolean       @default(false) @map("is_archived")
   firstSeenAt            DateTime      @default(now()) @map("first_seen_at") @db.Timestamptz(3)
@@ -242,6 +247,7 @@ model Asset {
   tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   client        Client         @relation(fields: [tenantId, clientId], references: [tenantId, id], onDelete: Cascade)
   integration   Integration    @relation(fields: [tenantId, integrationId], references: [tenantId, id], onDelete: Cascade)
+  mutedBy       User?          @relation(fields: [tenantId, mutedByUserId], references: [tenantId, id], onDelete: NoAction)
   backupResults BackupResult[]
   incidents     Incident[]
 

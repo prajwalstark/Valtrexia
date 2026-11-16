@@ -8,7 +8,7 @@ Version 1 is **read-only**. It never starts, stops or changes a backup job.
 
 ## Status
 
-Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and tested. Phase 2 is under way, following [PLAN-PHASE-2.md](./PLAN-PHASE-2.md): steps 1 to 3 of 12 are done (continuous integration; handling of vendor data that stops arriving; the stale-backup rule). It is **not production-ready**. Three things have never been run against the real system they depend on, and several production requirements are not built.
+Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and tested. Phase 2 is under way, following [PLAN-PHASE-2.md](./PLAN-PHASE-2.md): steps 1 to 4 of 12 are done (continuous integration; handling of vendor data that stops arriving; the stale-backup rule; asset settings and mute). It is **not production-ready**. Three things have never been run against the real system they depend on, and several production requirements are not built.
 
 **What works, verified here:**
 
@@ -181,6 +181,24 @@ The decisions (which view, and where each client sits) are pure functions in `ap
 **Client page.** The client's open incidents, then its assets worst first. Each asset shows its status, when it last backed up, and a strip of the last 14 days: one square per UTC day, showing that day's _worst_ result, so one failure is never hidden behind later successes. An empty square is a day with no backup. Opening an asset lists its individual backups with the vendor's own status, screenshot verification and any message. Assets that are archived, paused or muted are listed last and dimmed.
 
 **Acknowledging an incident** records who is looking at it and when. It does not close the incident; only a completed backup does. Owners and technicians can both acknowledge.
+
+### Asset settings
+
+Opening an asset on the client page shows its settings beneath its backups. "Settings for all assets", above the list, applies the same to every asset of the client that is not archived.
+
+| Setting                    | What it does                                                                                                    | Who                                                 |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| Mute, with an end date     | Stops judging the asset until then: its open incidents close, and it leaves the health totals                   | Anyone, for up to 30 days. Owners, for up to a year |
+| Mute until unmuted         | The same, with no end date. This is how to stop watching an asset for good                                      | Owners                                              |
+| Unmute                     | Starts judging it again. Any problems reappear at the next sync                                                 | Anyone, whoever set the mute                        |
+| Expected frequency and SLA | How often a backup is expected, and the longest the asset may go without one. One hour to one year (8760 hours) | Owners                                              |
+
+- **Every mute needs a reason.** Who muted an asset, when, until when and why is shown on the asset while the mute stands.
+- **The limits are enforced on the server**, whatever a form sends: muting hides problems, so a technician's reach is limited to 30 days, while unmuting can only bring problems back into view, so anyone may do it.
+- **Every change is written to the audit log** in the same transaction, one entry per asset even when a change was made for a whole client, with the values before and after.
+- **Frequency and SLA changes take effect at the next sync**, which re-judges the asset. A mute takes effect at once.
+- **An asset's "paused" flag is not a setting.** It is the vendor's own and each sync overwrites it. A mute without an end date is the equivalent for someone here.
+- An asset first seen from a vendor takes the vendor's schedule as its expected frequency when the vendor reports one. After that the value belongs to the MSP and syncs never overwrite it.
 
 How status is shown:
 

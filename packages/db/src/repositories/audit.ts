@@ -37,3 +37,26 @@ export async function recordAudit(
     },
   });
 }
+
+/**
+ * Appends several entries at once, for one action that changed many things:
+ * each thing still gets its own entry, so its history can be read on its own.
+ */
+export async function recordAudits(
+  { tx, tenantId }: TenantContext,
+  entries: AuditEntry[],
+): Promise<void> {
+  if (entries.length === 0) return;
+  await tx.auditLog.createMany({
+    data: entries.map((entry) => ({
+      tenantId,
+      actorType: entry.actorUserId ? ("user" as const) : ("system" as const),
+      actorUserId: entry.actorUserId,
+      action: entry.action,
+      targetType: entry.targetType ?? null,
+      targetId: entry.targetId ?? null,
+      metadata: entry.metadata ?? {},
+      ip: entry.ip ?? null,
+    })),
+  });
+}

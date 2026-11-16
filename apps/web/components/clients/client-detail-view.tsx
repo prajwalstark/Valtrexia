@@ -24,11 +24,17 @@ export function ClientDetailView({
   client,
   now,
   acknowledgeSlot,
+  assetSettingsSlot,
+  clientSettingsSlot,
 }: {
   client: ClientDetail;
   now: Date;
   /** Renders the acknowledge control for an incident. A slot keeps this a server component. */
   acknowledgeSlot: (incident: OpenIncident) => ReactNode;
+  /** Renders the settings of one asset, shown when its row is opened. */
+  assetSettingsSlot: (asset: ClientAsset) => ReactNode;
+  /** Renders the settings that apply to every asset of the client. */
+  clientSettingsSlot: ReactNode;
 }) {
   const watched = client.assets.filter((asset) => asset.watched);
   const unwatched = client.assets.filter((asset) => !asset.watched);
@@ -115,14 +121,32 @@ export function ClientDetailView({
             No protected assets have been found for this client yet.
           </p>
         ) : (
-          <ul className="mt-5 divide-y divide-line border-y border-line">
-            {watched.map((asset) => (
-              <AssetRow key={asset.id} asset={asset} now={now} />
-            ))}
-            {unwatched.map((asset) => (
-              <AssetRow key={asset.id} asset={asset} now={now} />
-            ))}
-          </ul>
+          <>
+            {client.settableAssets > 0 ? (
+              <details className="group/all mt-5 rounded-md border border-line">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-3 py-2.5 text-sm font-medium hover:bg-surface [&::-webkit-details-marker]:hidden">
+                  Settings for all assets
+                  <ChevronDown
+                    aria-hidden="true"
+                    className="size-4 text-subtle-foreground group-open/all:rotate-180"
+                  />
+                </summary>
+                <div className="border-t border-line px-3 py-4">{clientSettingsSlot}</div>
+              </details>
+            ) : null}
+            <ul className="mt-5 divide-y divide-line border-y border-line">
+              {/* One list, so a row that moves when it is muted keeps its place
+                  in the page's state: it stays open and shows the result. */}
+              {[...watched, ...unwatched].map((asset) => (
+                <AssetRow
+                  key={asset.id}
+                  asset={asset}
+                  now={now}
+                  settings={assetSettingsSlot(asset)}
+                />
+              ))}
+            </ul>
+          </>
         )}
       </section>
     </>
@@ -132,11 +156,19 @@ export function ClientDetailView({
 function notWatchedReason(asset: ClientAsset): string | null {
   if (asset.isArchived) return "Archived";
   if (asset.isPaused) return "Paused";
-  if (!asset.watched && asset.mutedUntil) return `Muted until ${formatDate(asset.mutedUntil)}`;
+  if (asset.mute) return asset.mute.until ? `Muted until ${formatDate(asset.mute.until)}` : "Muted";
   return null;
 }
 
-function AssetRow({ asset, now }: { asset: ClientAsset; now: Date }) {
+function AssetRow({
+  asset,
+  now,
+  settings,
+}: {
+  asset: ClientAsset;
+  now: Date;
+  settings: ReactNode;
+}) {
   const reason = notWatchedReason(asset);
   const meta = [asset.type, asset.deviceName, asset.integrationName].filter(Boolean).join(", ");
 
@@ -264,6 +296,9 @@ function AssetRow({ asset, now }: { asset: ClientAsset; now: Date }) {
                 </p>
               ) : null}
             </>
+          )}
+          {asset.isArchived ? null : (
+            <div className="mt-6 border-t border-line/60 pt-5">{settings}</div>
           )}
         </div>
       </details>
