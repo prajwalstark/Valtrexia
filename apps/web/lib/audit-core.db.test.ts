@@ -303,6 +303,34 @@ describe("describeAuditEntry", () => {
   const say = (action: string, targetId: string | null, metadata: unknown, zone = "UTC") =>
     describeAuditEntry({ action, targetId, metadata }, names, zone);
 
+  it("describes a record moved to a new encryption key, naming the record and never the key", () => {
+    const meta = { name: "Datto", fromKeyId: "local:abc", toKeyId: "aws-kms:arn:aws:kms:x" };
+    expect(
+      describeAuditEntry(
+        {
+          action: "encryption.rewrapped",
+          targetType: "integration",
+          targetId: INTEGRATION,
+          metadata: meta,
+        },
+        names,
+        "UTC",
+      ),
+    ).toBe("Moved the saved keys of Datto main to a new encryption key");
+    expect(
+      describeAuditEntry(
+        {
+          action: "encryption.rewrapped",
+          targetType: "notification_channel",
+          targetId: randomUUID(),
+          metadata: { ...meta, name: "Ops webhook" },
+        },
+        names,
+        "UTC",
+      ),
+    ).toBe("Moved the saved destination of the channel Ops webhook to a new encryption key");
+  });
+
   it("describes mutes: dated, open-ended, for a whole client, and what they closed", () => {
     const dated = {
       until: "2026-11-19T15:00:00.000Z",

@@ -8,7 +8,7 @@ Version 1 is **read-only**. It never starts, stops or changes a backup job.
 
 ## Status
 
-Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and tested. Phase 2 is under way, following [PLAN-PHASE-2.md](./PLAN-PHASE-2.md): steps 1 to 9 of 12 are done (continuous integration; handling of vendor data that stops arriving; the stale-backup rule; asset settings and mute; the incidents page, audit log and workspace settings; the notification outbox and signed webhooks; the notifications page and email channels, short of a real email provider; the Veeam Service Provider Console connector; the Kaseya UniView (Unitrends) connector). It is **not production-ready**. Three things have never been run against the real system they depend on, and several production requirements are not built.
+Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and tested. Phase 2 is under way, following [PLAN-PHASE-2.md](./PLAN-PHASE-2.md): steps 1 to 10 of 12 are done (continuous integration; handling of vendor data that stops arriving; the stale-backup rule; asset settings and mute; the incidents page, audit log and workspace settings; the notification outbox and signed webhooks; the notifications page and email channels, short of a real email provider; the Veeam Service Provider Console connector; the Kaseya UniView (Unitrends) connector; the AWS KMS key provider and key rotation). It is **not production-ready**. Three things have never been run against the real system they depend on, and several production requirements are not built.
 
 **What works, verified here:**
 
@@ -26,14 +26,15 @@ Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and test
 | Veeam VSPC      | Built from Veeam's published OpenAPI specification, but never run against a real console. See [Veeam Service Provider Console](#veeam-service-provider-console). |
 | Kaseya UniView  | Built from Kaseya's published OpenAPI specification, but never run against a real account. See [Kaseya UniView (Unitrends)](#kaseya-uniview-unitrends).          |
 | 3D view         | Only run with software rendering, never on a graphics card.                                                                                                      |
+| AWS KMS         | Built and tested against a stand-in KMS that behaves as AWS documents, never against AWS itself. See [Key management](#key-management).                          |
 
-**What is not built:** the production key provider (KMS), sending email through a real provider (the provider is not chosen yet; see [Email](#email)), and the items listed in [SECURITY.md](./SECURITY.md).
+**What is not built:** sending email through a real provider (the provider is not chosen yet; see [Email](#email)), and the items listed in [SECURITY.md](./SECURITY.md).
 
 ### Before production
 
 1. Run the app against a real Clerk instance and walk through sign-up, MFA, onboarding and the webhook.
 2. Connect a real Datto account and reconcile the connector's assumptions with what Datto returns.
-3. Write the KMS key provider for your cloud. The local key provider refuses to run in production.
+3. Create the AWS KMS key and IAM permissions, and set `VALTREXIA_KEY_PROVIDER=aws-kms` (see [Key management](#key-management)). The local key provider refuses to run in production.
 4. Work through the open items in [SECURITY.md](./SECURITY.md).
 
 ## Repository layout
@@ -566,8 +567,39 @@ Vendor credentials are encrypted before they reach the database, with envelope e
 
 - Each credential set gets its own random data key (AES-256-GCM). The data key is wrapped by a key-encryption key and stored beside the ciphertext.
 - Both layers are bound to the tenant id and integration id. A ciphertext copied to another tenant's row, or another integration, will not decrypt.
-- The key-encryption key comes from a `KeyProvider`. In development that is `VALTREXIA_LOCAL_KEK`; the local provider refuses to run when `NODE_ENV=production`, where a KMS provider is required. The KMS provider is not written yet.
+- The key-encryption key comes from a `KeyProvider`: AWS KMS in production, `VALTREXIA_LOCAL_KEK` in development. The local provider refuses to run when `NODE_ENV=production`. See [Key management](#key-management).
 - Decrypted values come back wrapped in `Secret`, which prints as `[redacted]` if logged, serialized or inspected. The value is only reachable through `.expose()`.
+
+### Key management
+
+**AWS KMS.** Set `VALTREXIA_KEY_PROVIDER=aws-kms` and `VALTREXIA_KMS_KEY_ID` to the ARN of a symmetric KMS key, or of an alias for it. The web app and the worker both need it. AWS credentials come from the AWS SDK's usual sources, normally the IAM role the app runs under; never put AWS keys in this repository.
+
+- Each record's data key is wrapped with KMS `Encrypt` and unwrapped with `Decrypt`, naming the key, so KMS refuses a wrapped key made with any other key.
+- The tenant, record and purpose go to KMS as encryption context (`valtrexia: v1|purpose|tenant|record`), so KMS itself refuses a wrapped key copied onto another tenant's or record's row. That context appears in CloudTrail, which shows which record each call was for. It holds ids, never values.
+- Data keys are not cached: each decryption is one KMS call, so a revoked permission takes effect at once. In practice that is one call per integration per sync and one per webhook sent.
+- When KMS cannot answer (throttling, an outage, a disabled key, a missing permission), the error says the key service is unavailable. Syncs retry on the next run and webhooks on their usual schedule. A tenant is never told to re-enter credentials because of it. Only a value that does not decrypt is reported as unreadable.
+
+The IAM role needs this, and nothing else from KMS:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": ["kms:Encrypt", "kms:Decrypt"],
+  "Resource": "arn:aws:kms:REGION:ACCOUNT:key/KEY-ID"
+}
+```
+
+During a rotation, also allow `kms:Decrypt` on the old key. Enable KMS automatic key rotation on the key: AWS then rotates its key material yearly under the same ARN, old records keep decrypting, and nothing here has to run.
+
+**Rotating the key.** To move to a different key (another KMS key, or from a local key to KMS outside production), use `pnpm keys:rotate`. It re-wraps each record's data key under the current key, in every tenant, one record at a time. The values themselves are not re-encrypted, and no value is printed or logged.
+
+1. Configure the new key as current, keeping the old one readable: for KMS, point `VALTREXIA_KMS_KEY_ID` (or its alias) at the new key and leave `kms:Decrypt` on the old one; for local keys, set `VALTREXIA_LOCAL_KEK` to the new key and `VALTREXIA_PREVIOUS_LOCAL_KEKS` to the old one. Deploy the web app and worker with that configuration.
+2. Run `pnpm keys:rotate --dry-run` to see how many records are under which key, then `pnpm keys:rotate`.
+3. It is safe while the app is running. A record replaced while it is being moved is left alone, because its new value is already under the new key. The command is resumable: if KMS stops answering it stops, and running it again carries on. It exits non-zero while anything is left.
+4. A record no configured key can read is listed by id and left in place; its owner has to re-enter it. Everything else is still moved.
+5. When it reports that every record is under the current key, remove the old key from the configuration and revoke access to it.
+
+Each record moved is written to its tenant's audit log, as the system.
 
 `createLogger` returns a structured JSON logger that redacts before writing: properties named like credentials, tokens, headers or raw vendor payloads at any depth, and credentials embedded in message text (auth headers, `user:password@` URLs, secret query parameters). Redaction is a safety net; do not pass secrets to the logger.
 

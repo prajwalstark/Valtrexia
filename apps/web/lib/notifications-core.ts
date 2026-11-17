@@ -2,6 +2,7 @@ import { buildTestPayload, RAISED_INCIDENT_TYPES, type RaisedIncidentType } from
 import {
   generateWebhookSecret,
   MAX_EMAIL_RECIPIENTS,
+  KeyServiceUnavailableError,
   OutboundRefusedError,
   parseOutboundUrl,
   resolvePublicAddresses,
@@ -123,6 +124,13 @@ export async function createWebhookChannelFor(
     };
   } catch (error) {
     if (error instanceof ChannelNameTakenError) return NAME_TAKEN;
+    if (error instanceof KeyServiceUnavailableError) {
+      return {
+        status: "error",
+        message:
+          "The encryption key service could not be reached, so the channel was not created. Try again shortly.",
+      };
+    }
     throw error;
   }
 }

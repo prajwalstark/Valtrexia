@@ -8,9 +8,11 @@ import { brand } from "@valtrexia/core";
 import {
   createLogger,
   generateWebhookSecret,
+  KeyServiceUnavailableError,
   LocalKeyProvider,
   Secret,
   verifyWebhook,
+  type KeyProvider,
 } from "@valtrexia/core/server";
 import {
   claimNotificationBatch,
@@ -399,6 +401,26 @@ describe("notifications: delivery", () => {
     expect(await s.batches()).toMatchObject([{ status: "failed", attempts: 8 }]);
     expect(await s.deliver(now)).toEqual([]);
     expect(to(hook.path)).toHaveLength(8);
+  });
+
+  it("retries when the key service cannot read the destination, and sends once it can", async () => {
+    const vendor = new ScriptedVendor().result("FS01", at(-40), "success");
+    const s = await setup(vendor);
+    const hook = await s.channel("Webhook during a KMS outage");
+    await s.sync(T0);
+    const down: KeyProvider = {
+      wrapKey: (key, aad) => keyProvider.wrapKey(key, aad),
+      unwrapKey: () => Promise.reject(new KeyServiceUnavailableError()),
+      canUnwrap: (keyId) => keyProvider.canUnwrap(keyId),
+    };
+    expect(await s.deliver(T0, { keyProvider: down })).toMatchObject([{ result: "retrying" }]);
+    expect((await s.batches())[0]).toMatchObject({
+      status: "pending",
+      lastError:
+        "The channel's destination could not be read: the encryption key service could not be reached.",
+    });
+    expect(to(hook.path)).toHaveLength(0);
+    expect(await s.deliver(new Date(T0.getTime() + MINUTE))).toMatchObject([{ result: "sent" }]);
   });
 
   it("stops at once when the endpoint says it no longer exists", async () => {

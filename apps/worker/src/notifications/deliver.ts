@@ -2,6 +2,7 @@ import {
   DecryptionError,
   EmailSendError,
   OutboundFailedError,
+  KeyServiceUnavailableError,
   OutboundRefusedError,
   postJson,
   signWebhook,
@@ -86,6 +87,13 @@ export function outcomeOfError(error: unknown): BatchOutcome {
     return {
       status: "failed",
       error: "The channel's saved destination could not be read. Set the channel up again.",
+    };
+  }
+  if (error instanceof KeyServiceUnavailableError) {
+    return {
+      status: "retry",
+      error:
+        "The channel's destination could not be read: the encryption key service could not be reached.",
     };
   }
   return { status: "retry", error: "Sending failed unexpectedly." };

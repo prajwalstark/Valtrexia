@@ -18,7 +18,7 @@ export const AUDIT_CATEGORIES = {
   integrations: { label: "Integrations", prefixes: ["integration."] },
   notifications: { label: "Notifications", prefixes: ["notification_channel."] },
   people: { label: "People", prefixes: ["user."] },
-  workspace: { label: "Workspace", prefixes: ["workspace.", "tenant."] },
+  workspace: { label: "Workspace", prefixes: ["workspace.", "tenant.", "encryption."] },
 } as const satisfies Record<string, { label: string; prefixes: readonly string[] }>;
 export type AuditCategory = keyof typeof AUDIT_CATEGORIES;
 
@@ -109,7 +109,7 @@ const TEST_OUTCOME: Record<string, string> = {
  * name, so a new kind of entry is never hidden.
  */
 export function describeAuditEntry(
-  entry: { action: string; targetId: string | null; metadata: unknown },
+  entry: { action: string; targetType?: string | null; targetId: string | null; metadata: unknown },
   names: AuditNames,
   timeZone: string,
 ): string {
@@ -200,6 +200,10 @@ export function describeAuditEntry(
       return `Turned off the ${text(meta.type) ?? "notification"} channel ${text(meta.name) ?? "?"}`;
     case "notification_channel.deleted":
       return `Deleted the ${text(meta.type) ?? "notification"} channel ${text(meta.name) ?? "?"}`;
+    case "encryption.rewrapped":
+      return entry.targetType === "notification_channel"
+        ? `Moved the saved destination of the channel ${text(meta.name) ?? "?"} to a new encryption key`
+        : `Moved the saved keys of ${integration} to a new encryption key`;
     case "tenant.provisioned":
       return "Created the workspace";
     case "workspace.settings_changed": {

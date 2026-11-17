@@ -4,14 +4,22 @@ export {
   DecryptionError,
   decryptJson,
   encryptJson,
+  envelopeKeyId,
+  rewrapEnvelope,
   type EncryptedEnvelope,
   type EncryptionContext,
 } from "./crypto/envelope";
+export { AwsKmsKeyProvider, type KmsSender } from "./crypto/aws-kms";
 export {
   createKeyProviderFromEnv,
-  LocalKeyProvider,
-  type KeyProvider,
   type KeyProviderEnv,
+  type KeyProviderFactories,
+} from "./crypto/config";
+export {
+  KeyServiceUnavailableError,
+  LocalKeyProvider,
+  RotatingKeyProvider,
+  type KeyProvider,
 } from "./crypto/key-provider";
 export { Secret } from "./crypto/secret";
 export { createLogger, type CreateLoggerOptions, type Logger } from "./logging/logger";

@@ -117,8 +117,10 @@ describe("catalog: every table is protected", () => {
       ORDER BY p.proname
     `);
     expect(result.rows.map((row) => row.proname)).toEqual([
+      "count_encrypted_records_by_key",
       "list_due_integrations",
       "list_due_notification_batches",
+      "list_encrypted_records",
       "provision_tenant",
       "resolve_tenant_id",
     ]);
@@ -424,6 +426,26 @@ describe("cross-tenant references", () => {
     );
     expect(rows).toHaveLength(2);
     expect(Object.keys(rows[0]!).sort()).toEqual(["batch_id", "tenant_id"]);
+  });
+
+  it("encrypted records are listed across tenants as ids and key ids only", async () => {
+    const listed = await asTenant(app, null, (client) =>
+      client.query<Record<string, string>>(
+        "SELECT * FROM list_encrypted_records('no-such-key', NULL, NULL, NULL, 1000)",
+      ),
+    );
+    const ours = listed.rows.filter((row) => [a.tenantId, b.tenantId].includes(row.tenant_id!));
+    expect(ours.length).toBeGreaterThanOrEqual(2);
+    expect(Object.keys(ours[0]!).sort()).toEqual([
+      "key_id",
+      "record_id",
+      "record_type",
+      "tenant_id",
+    ]);
+    const counted = await asTenant(app, null, (client) =>
+      client.query<Record<string, string>>("SELECT * FROM count_encrypted_records_by_key()"),
+    );
+    expect(Object.keys(counted.rows[0]!).sort()).toEqual(["key_id", "record_type", "records"]);
   });
 });
 

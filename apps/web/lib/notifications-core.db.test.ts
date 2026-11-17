@@ -1,5 +1,9 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { LocalKeyProvider, type Resolver } from "@valtrexia/core/server";
+import {
+  KeyServiceUnavailableError,
+  LocalKeyProvider,
+  type Resolver,
+} from "@valtrexia/core/server";
 import { createDb, decryptChannelDestination, type Db } from "@valtrexia/db";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import {
@@ -78,6 +82,28 @@ const valid = {
 };
 
 describe("createWebhookChannelFor", () => {
+  it("creates nothing, and says why, when the key service cannot encrypt the destination", async () => {
+    const w = await workspace();
+    const state = await createWebhookChannelFor(
+      {
+        ...deps(),
+        keyProvider: {
+          wrapKey: () => Promise.reject(new KeyServiceUnavailableError()),
+          unwrapKey: (wrapped, keyId, aad) => keyProvider.unwrapKey(wrapped, keyId, aad),
+          canUnwrap: (keyId) => keyProvider.canUnwrap(keyId),
+        },
+      },
+      w.owner,
+      valid,
+    );
+    expect(state).toEqual({
+      status: "error",
+      message:
+        "The encryption key service could not be reached, so the channel was not created. Try again shortly.",
+    });
+    expect(await listChannelsFor({ db }, w.tech)).toEqual([]);
+  });
+
   it("creates the channel, stores the destination encrypted, and hands back the secret once", async () => {
     const w = await workspace();
     const state = await createWebhookChannelFor(deps(), w.owner, valid);

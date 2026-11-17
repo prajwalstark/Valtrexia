@@ -8,7 +8,8 @@ import {
   type EncryptedEnvelope,
   type EncryptionContext,
 } from "./envelope";
-import { createKeyProviderFromEnv, LocalKeyProvider, type KeyProvider } from "./key-provider";
+import { createKeyProviderFromEnv } from "./config";
+import { LocalKeyProvider, type KeyProvider } from "./key-provider";
 import { Secret } from "./secret";
 
 const newKey = () => randomBytes(32).toString("base64");
@@ -188,6 +189,7 @@ describe("envelope encryption: tampering and wrong keys", () => {
         calls.push(`unwrap:${keyId}`);
         return inner.unwrapKey(wrapped, inner.keyId, aad);
       },
+      canUnwrap: (keyId) => keyId === "kms:alias/test",
     };
     const envelope = await encryptJson(credentials, context, kmsLike);
     expect(envelope.keyId).toBe("kms:alias/test");
@@ -262,9 +264,7 @@ describe("createKeyProviderFromEnv", () => {
 
   it("rejects an unknown provider and says the KMS one is not built yet", () => {
     expect(() => createKeyProviderFromEnv({ VALTREXIA_KEY_PROVIDER: "vault" })).toThrow(/Unknown/);
-    expect(() => createKeyProviderFromEnv({ VALTREXIA_KEY_PROVIDER: "kms" })).toThrow(
-      /not implemented yet/,
-    );
+    expect(() => createKeyProviderFromEnv({ VALTREXIA_KEY_PROVIDER: "kms" })).toThrow(/Unknown/);
   });
 
   it("never echoes the configured key in an error", () => {

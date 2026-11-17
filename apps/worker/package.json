@@ -7,6 +7,7 @@
     "dev": "tsx watch --env-file-if-exists=../../.env src/index.ts",
     "start": "node --env-file-if-exists=../../.env --import tsx src/index.ts",
     "seed": "node --env-file-if-exists=../../.env --import tsx src/scripts/seed.ts",
+    "keys:rotate": "node --env-file-if-exists=../../.env --import tsx src/scripts/rotate-keys.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

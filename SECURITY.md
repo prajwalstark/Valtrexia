@@ -40,6 +40,10 @@ What protects tenant data in this codebase, where each control lives, how it is 
 | Audit trail                                                                                         | `audit_logs`; the runtime role has no `UPDATE` or `DELETE` on it                                                                                                                                                   | Updates and deletes are refused by the database                                                                                                            |
 | Demo vendor cannot run in production                                                                | `isMockAllowed`                                                                                                                                                                                                    | Refused when `NODE_ENV=production`, whatever the setting                                                                                                   |
 | Local encryption key cannot run in production                                                       | `createKeyProviderFromEnv`                                                                                                                                                                                         | Refused when `NODE_ENV=production`                                                                                                                         |
+| Production encryption keys never leave the key service                                              | `AwsKmsKeyProvider`: data keys are wrapped and unwrapped by AWS KMS; the app holds only wrapped keys. The IAM role needs only `kms:Encrypt` and `kms:Decrypt`                                                      | Stand-in KMS round trips; the stored key id is the key's ARN                                                                                               |
+| KMS itself binds each wrapped key to its tenant and record                                          | The envelope's authenticated data is sent as KMS encryption context; Decrypt names the expected key and the answer's key is checked                                                                                | Copies onto another tenant, record or purpose refused; a relabelled answer refused                                                                         |
+| An outage of the key service is not mistaken for bad credentials                                    | `KeyServiceUnavailableError`, distinct from `DecryptionError`; syncs and webhooks retry, forms say nothing was saved                                                                                               | Every KMS failure name mapped; sync, delivery, connect and channel tests during an outage                                                                  |
+| Keys can be rotated without downtime or exposing values                                             | `RotatingKeyProvider` and `pnpm keys:rotate`: only data keys are re-wrapped, after checking each value's tag; conditional writes; resumable; audited                                                               | Tenants under an old key moved; ciphertexts unchanged; dry run, outage, concurrent replacement and unreadable records; logs searched for values            |
 | Baseline response headers                                                                           | `apps/web/next.config.ts`                                                                                                                                                                                          | Checked against the built app: no framing, no MIME sniffing, strict referrer, HSTS                                                                         |
 | Errors do not leak internals                                                                        | Vendor and sync errors use messages we wrote; `app/error.tsx` shows no error text                                                                                                                                  | Connector and sync tests assert the stored and shown messages                                                                                              |
 | No secrets in the repository                                                                        | `.env` is ignored; `.env.example` holds placeholders                                                                                                                                                               | Tracked files scanned for key patterns at the end of Phase 1                                                                                               |
@@ -51,6 +55,7 @@ Continuous integration runs the type check, lint, every test and a production bu
 These were built and tested in isolation, but never exercised against the real thing:
 
 - **Clerk.** Sign-in, MFA setup, organization creation and webhook delivery have not been run against a live Clerk instance. The session and webhook logic is tested with Clerk replaced by fixed inputs.
+- **AWS KMS.** The provider has never called AWS. It is tested against a stand-in that follows KMS's documented behaviour for Encrypt and Decrypt (encryption context, named keys, error names). Check on a real key: that the IAM role's two permissions suffice, that CloudTrail shows the context, and how long a call takes from where the app runs.
 - **Datto.** The connector has never called Datto. Its response shapes are assumptions, listed in the README.
 - **The 3D view on a graphics card.** It was only run with software rendering.
 
@@ -58,16 +63,14 @@ These were built and tested in isolation, but never exercised against the real t
 
 Not built. Each should be settled before production use.
 
-1. **KMS key provider.** Only the local development provider exists, and it refuses to run in production. The interface is in place; the provider depends on which cloud is chosen.
-2. **Key rotation.** Rotating the key-encryption key means re-wrapping each stored data key. There is no tool for that yet.
-3. **A full Content-Security-Policy.** Only `frame-ancestors`, `base-uri` and `object-src` are set. A `script-src` policy needs the identity provider's hosts and per-request nonces.
-4. **Rate limiting** exists only for connection tests, and is held in memory per web instance. Sign-in is rate limited by Clerk.
-5. **Transport security for Postgres and Redis.** Connection strings are taken as given. Production should require TLS and authentication on both.
-6. **Tenant offboarding.** Deleting an organization in Clerk does not delete its data. There is no deletion or export procedure yet.
-7. **Retention.** Backup results, raw payloads and audit entries are kept indefinitely.
-8. **Monitoring and alerting** on the application itself: failed syncs across tenants, queue depth, error rates. A stopped worker is now visible inside the app (assets turn unknown and the dashboard says syncs have stopped), but only to someone looking at it. Nothing pages an operator.
-9. **Database backups** of this application's own Postgres.
-10. **An independent review.** Nobody other than the author has reviewed this code.
+1. **A full Content-Security-Policy.** Only `frame-ancestors`, `base-uri` and `object-src` are set. A `script-src` policy needs the identity provider's hosts and per-request nonces.
+2. **Rate limiting** exists only for connection tests, and is held in memory per web instance. Sign-in is rate limited by Clerk.
+3. **Transport security for Postgres and Redis.** Connection strings are taken as given. Production should require TLS and authentication on both.
+4. **Tenant offboarding.** Deleting an organization in Clerk does not delete its data. There is no deletion or export procedure yet.
+5. **Retention.** Backup results, raw payloads and audit entries are kept indefinitely.
+6. **Monitoring and alerting** on the application itself: failed syncs across tenants, queue depth, error rates. A stopped worker is now visible inside the app (assets turn unknown and the dashboard says syncs have stopped), but only to someone looking at it. Nothing pages an operator.
+7. **Database backups** of this application's own Postgres.
+8. **An independent review.** Nobody other than the author has reviewed this code.
 
 ## Reporting a problem
 

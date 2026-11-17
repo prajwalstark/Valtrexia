@@ -37,6 +37,18 @@ export interface DueIntegration {
   tenantId: string;
 }
 
+/** The kinds of record that hold an encrypted value. */
+export type EncryptedRecordType = "integration" | "notification_channel";
+
+/** An encrypted record, and the key its data key is wrapped under. No ciphertext. */
+export interface EncryptedRecordRef {
+  tenantId: string;
+  type: EncryptedRecordType;
+  id: string;
+  /** Null when the stored value is not an envelope at all. */
+  keyId: string | null;
+}
+
 export interface Db {
   /**
    * Runs `fn` in a transaction confined to one tenant by row-level security.
@@ -71,6 +83,22 @@ export interface Db {
    * tenants. Ids only; each is then claimed and sent inside its own tenant.
    */
   listDueNotificationBatches(input?: { limit?: number }): Promise<DueNotificationBatch[]>;
+
+  /**
+   * Encrypted records, across all tenants, whose data key is not wrapped
+   * under `excludeKeyId`: one page, after `after`, in a stable order. Ids and
+   * key ids only; for the key rotation command.
+   */
+  listEncryptedRecords(input: {
+    excludeKeyId: string;
+    after?: Pick<EncryptedRecordRef, "tenantId" | "type" | "id"> | null;
+    limit?: number;
+  }): Promise<EncryptedRecordRef[]>;
+
+  /** How many records of each type are wrapped under each key, across all tenants. */
+  countEncryptedRecordsByKey(): Promise<
+    { type: EncryptedRecordType; keyId: string | null; records: number }[]
+  >;
 
   /**
    * Throws unless the connection's role is safe to serve tenants with: not a
@@ -142,6 +170,40 @@ export function createDb({ url, maxConnections = 10 }: CreateDbOptions): Db {
         SELECT batch_id, tenant_id FROM list_due_notification_batches(${Math.floor(limit)}::int)
       `;
       return rows.map((row) => ({ batchId: row.batch_id, tenantId: row.tenant_id }));
+    },
+
+    async listEncryptedRecords({ excludeKeyId, after = null, limit = 200 }) {
+      const rows = await prisma.$queryRaw<
+        {
+          tenant_id: string;
+          record_type: EncryptedRecordType;
+          record_id: string;
+          key_id: string | null;
+        }[]
+      >`
+        SELECT tenant_id, record_type, record_id, key_id
+        FROM list_encrypted_records(
+          ${excludeKeyId}, ${after?.tenantId ?? null}::uuid, ${after?.type ?? null}::text,
+          ${after?.id ?? null}::uuid, ${Math.floor(limit)}::int
+        )
+      `;
+      return rows.map((row) => ({
+        tenantId: row.tenant_id,
+        type: row.record_type,
+        id: row.record_id,
+        keyId: row.key_id,
+      }));
+    },
+
+    async countEncryptedRecordsByKey() {
+      const rows = await prisma.$queryRaw<
+        { record_type: EncryptedRecordType; key_id: string | null; records: bigint }[]
+      >`SELECT record_type, key_id, records FROM count_encrypted_records_by_key()`;
+      return rows.map((row) => ({
+        type: row.record_type,
+        keyId: row.key_id,
+        records: Number(row.records),
+      }));
     },
 
     async assertSafeRole() {

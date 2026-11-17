@@ -8,12 +8,15 @@ export {
   type Db,
   type DueIntegration,
   type DueNotificationBatch,
+  type EncryptedRecordRef,
+  type EncryptedRecordType,
   type TenantContext,
   type TenantTx,
   type TransactionOptions,
 } from "./db";
 export { InvalidTenantIdError, UnsafeDatabaseRoleError } from "./errors";
 export { recordAudit, recordAudits, type AuditEntry } from "./repositories/audit";
+export { rewrapRecord, type RewrapOutcome } from "./repositories/key-rotation";
 export {
   deactivateUser,
   upsertUser,

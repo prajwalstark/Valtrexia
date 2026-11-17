@@ -11,7 +11,14 @@ import {
   RateLimitError,
   VendorError,
 } from "@valtrexia/connectors";
-import { createLogger, DecryptionError, LocalKeyProvider, Secret } from "@valtrexia/core/server";
+import {
+  createLogger,
+  DecryptionError,
+  KeyServiceUnavailableError,
+  LocalKeyProvider,
+  Secret,
+  type KeyProvider,
+} from "@valtrexia/core/server";
 import { createDb, createIntegration, replaceIntegrationCredentials, type Db } from "@valtrexia/db";
 import { afterAll, beforeAll, beforeEach, describe, expect, inject, it } from "vitest";
 import { classifyFailure, syncIntegration, type SyncDeps } from "./sync-integration";
@@ -221,6 +228,8 @@ describe("sync failure kinds", () => {
     expect(classifyFailure(new InvalidResponseError("no items"))).toBe("invalid_response");
     expect(classifyFailure(new ConnectorUnavailableError("off"))).toBe("unavailable");
     expect(classifyFailure(new DestinationRefusedError("Private address."))).toBe("credentials");
+    // An outage of the key service is ours to fix, and passes: not the tenant's credentials.
+    expect(classifyFailure(new KeyServiceUnavailableError())).toBe("internal");
     expect(classifyFailure(new Error("anything"))).toBe("internal");
     expect(classifyFailure("a string")).toBe("internal");
   });
@@ -240,6 +249,31 @@ describe("sync failure kinds", () => {
     const switchedOff = await newTenant();
     await expect(syncIntegration(deps(T0, { allowMock: false }), switchedOff)).rejects.toThrow();
     expect((await health(switchedOff)).lastSyncErrorKind).toBe("unavailable");
+  });
+});
+
+describe("sync failures caused by the key service", () => {
+  it("records an outage as retrying, says what happened, and never asks for new credentials", async () => {
+    const target = await newTenant();
+    const down: KeyProvider = {
+      wrapKey: (key, aad) => keyProvider.wrapKey(key, aad),
+      unwrapKey: () => Promise.reject(new KeyServiceUnavailableError()),
+      canUnwrap: (keyId) => keyProvider.canUnwrap(keyId),
+    };
+    await expect(syncIntegration(deps(T0, { keyProvider: down }), target)).rejects.toThrow();
+    expect(await health(target)).toMatchObject({
+      lastSyncErrorKind: "internal",
+      consecutiveFailures: 1,
+    });
+    const { lastSyncError } = await db.withTenant(target.tenantId, ({ tx }) =>
+      tx.integration.findUniqueOrThrow({ where: { id: target.integrationId } }),
+    );
+    expect(lastSyncError).toBe(
+      "The encryption key service could not be reached. The next sync tries again.",
+    );
+    // Once it answers again, the next sync succeeds with the same stored credentials.
+    await syncIntegration(deps(after(15 * MINUTE)), target);
+    expect(await health(target)).toMatchObject({ lastSyncErrorKind: null, consecutiveFailures: 0 });
   });
 });
 

@@ -34,6 +34,7 @@ import {
 } from "@valtrexia/core";
 import {
   DecryptionError,
+  KeyServiceUnavailableError,
   type KeyProvider,
   type Logger,
   type OutboundPolicy,
@@ -707,6 +708,9 @@ export function describeFailure(error: unknown): string {
   if (error instanceof ConnectorError) return error.message;
   if (error instanceof DecryptionError) {
     return "The saved credentials could not be read. Enter them again.";
+  }
+  if (error instanceof KeyServiceUnavailableError) {
+    return "The encryption key service could not be reached. The next sync tries again.";
   }
   return "The sync failed unexpectedly. It will be retried.";
 }

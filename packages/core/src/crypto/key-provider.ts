@@ -8,8 +8,27 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:
 export interface KeyProvider {
   /** Encrypts a data key. `aad` binds the result to its context. */
   wrapKey(dataKey: Buffer, aad: Buffer): Promise<{ keyId: string; wrappedKey: Buffer }>;
-  /** Reverses `wrapKey`. Must fail if `aad` or `keyId` differ from those used to wrap. */
+  /**
+   * Reverses `wrapKey`. Must fail if `aad` or `keyId` differ from those used
+   * to wrap. Throws `KeyServiceUnavailableError` when the answer is "try
+   * again later" rather than "this does not decrypt".
+   */
   unwrapKey(wrappedKey: Buffer, keyId: string, aad: Buffer): Promise<Buffer>;
+  /** Whether this provider is the one that can unwrap data keys wrapped under `keyId`. */
+  canUnwrap(keyId: string): boolean;
+}
+
+/**
+ * The key service could not answer: unreachable, throttled, not permitted,
+ * or the key is disabled. Unlike a decryption failure, nothing is wrong with
+ * the stored value, and retrying later can succeed. The message is ours and
+ * safe to show; it names no key and carries no ciphertext.
+ */
+export class KeyServiceUnavailableError extends Error {
+  constructor(options?: { cause?: unknown }) {
+    super("The encryption key service could not be reached.", options);
+    this.name = "KeyServiceUnavailableError";
+  }
 }
 
 const KEY_BYTES = 32;
@@ -63,40 +82,38 @@ export class LocalKeyProvider implements KeyProvider {
     decipher.setAuthTag(tag);
     return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
   }
-}
 
-export interface KeyProviderEnv {
-  NODE_ENV?: string | undefined;
-  VALTREXIA_KEY_PROVIDER?: string | undefined;
-  VALTREXIA_LOCAL_KEK?: string | undefined;
+  canUnwrap(keyId: string): boolean {
+    return keyId === this.keyId;
+  }
 }
 
 /**
- * Builds the key provider named by configuration.
- *
- * `local` is refused when NODE_ENV is "production": a key that sits in the
- * same environment as the database does not protect the database's contents.
+ * Wraps new data keys with one provider and unwraps with whichever provider
+ * owns a record's key id. This is how a key is rotated without downtime: the
+ * new key wraps everything written from now on, the old one still reads what
+ * was written before, and the rotation command moves the old records across.
  */
-export function createKeyProviderFromEnv(env: KeyProviderEnv): KeyProvider {
-  const kind = env.VALTREXIA_KEY_PROVIDER ?? "local";
+export class RotatingKeyProvider implements KeyProvider {
+  readonly #current: KeyProvider;
+  readonly #all: readonly KeyProvider[];
 
-  if (kind === "local") {
-    if (env.NODE_ENV === "production") {
-      throw new Error(
-        "VALTREXIA_KEY_PROVIDER=local is not allowed in production. Configure a KMS key provider.",
-      );
-    }
-    if (!env.VALTREXIA_LOCAL_KEK) {
-      throw new Error("VALTREXIA_LOCAL_KEK is not set. Generate one with: openssl rand -base64 32");
-    }
-    return new LocalKeyProvider(env.VALTREXIA_LOCAL_KEK);
+  constructor(current: KeyProvider, previous: readonly KeyProvider[] = []) {
+    this.#current = current;
+    this.#all = [current, ...previous];
   }
 
-  if (kind === "kms") {
-    // The production provider is written once the cloud KMS is chosen
-    // (open decision 4 in PLAN.md). It implements the same interface.
-    throw new Error("The KMS key provider is not implemented yet.");
+  wrapKey(dataKey: Buffer, aad: Buffer): Promise<{ keyId: string; wrappedKey: Buffer }> {
+    return this.#current.wrapKey(dataKey, aad);
   }
 
-  throw new Error(`Unknown VALTREXIA_KEY_PROVIDER: expected "local" or "kms".`);
+  unwrapKey(wrappedKey: Buffer, keyId: string, aad: Buffer): Promise<Buffer> {
+    const owner = this.#all.find((provider) => provider.canUnwrap(keyId));
+    if (!owner) throw new Error("No configured key can unwrap this data key.");
+    return owner.unwrapKey(wrappedKey, keyId, aad);
+  }
+
+  canUnwrap(keyId: string): boolean {
+    return this.#all.some((provider) => provider.canUnwrap(keyId));
+  }
 }

@@ -14,7 +14,13 @@ import {
   type ConnectorDeps,
 } from "@valtrexia/connectors";
 import { getVendor, type VendorId } from "@valtrexia/core";
-import { DecryptionError, Secret, type KeyProvider, type Logger } from "@valtrexia/core/server";
+import {
+  DecryptionError,
+  KeyServiceUnavailableError,
+  Secret,
+  type KeyProvider,
+  type Logger,
+} from "@valtrexia/core/server";
 import {
   createIntegration,
   deleteIntegration,
@@ -75,6 +81,25 @@ export type ActionState =
 const OWNERS_ONLY = "Only workspace owners can manage integrations.";
 const NOT_FOUND = "That integration no longer exists.";
 const TOO_MANY = "Too many connection tests. Wait a minute and try again.";
+const KEY_SERVICE_DOWN_MESSAGE =
+  "The encryption key service could not be reached, so nothing was saved. Try again shortly.";
+
+/** What a save returns instead of a value when the key service could not encrypt it. */
+const KEY_SERVICE_DOWN = Symbol("key service down");
+
+/**
+ * Waits for a save. A key service outage becomes a value the caller turns
+ * into a message, rather than an error page: nothing was written, and the
+ * same form can simply be sent again.
+ */
+async function unlessKeyServiceDown<T>(work: Promise<T>): Promise<T | typeof KEY_SERVICE_DOWN> {
+  try {
+    return await work;
+  } catch (error) {
+    if (error instanceof KeyServiceUnavailableError) return KEY_SERVICE_DOWN;
+    throw error;
+  }
+}
 
 const dattoFormSchema = z.object({
   name: z
@@ -151,6 +176,13 @@ function describeTestFailure(
     return {
       outcome: "failed",
       message: "The saved keys could not be read. Replace them with a new key pair.",
+    };
+  }
+  if (error instanceof KeyServiceUnavailableError) {
+    return {
+      outcome: "failed",
+      message:
+        "The saved keys could not be read just now: the encryption key service could not be reached. Try again shortly.",
     };
   }
   if (error instanceof ConnectorError) return { outcome: "failed", message: error.message };
@@ -276,16 +308,20 @@ export async function connectDatto(
   const test = await runTest(deps, session, "datto_bcdr", credentials, null);
   if (test.outcome !== "ok") return { status: "error", message: `Not saved. ${test.message}` };
 
-  const integration = await deps.db.withTenant(session.tenantId, (context) =>
-    createIntegration(context, deps.keyProvider, {
-      vendor: "datto_bcdr",
-      name,
-      credentials,
-      credentialHint: dattoCredentialHint(publicKey),
-      actorUserId: session.userId,
-      ip: deps.ip ?? null,
-    }),
+  const integration = await unlessKeyServiceDown(
+    deps.db.withTenant(session.tenantId, (context) =>
+      createIntegration(context, deps.keyProvider, {
+        vendor: "datto_bcdr",
+        name,
+        credentials,
+        credentialHint: dattoCredentialHint(publicKey),
+        actorUserId: session.userId,
+        ip: deps.ip ?? null,
+      }),
+    ),
   );
+  if (integration === KEY_SERVICE_DOWN)
+    return { status: "error", message: KEY_SERVICE_DOWN_MESSAGE };
   return {
     status: "ok",
     message: `${name} is connected. The first sync starts within a few minutes.`,
@@ -347,15 +383,18 @@ export async function replaceDattoCredentials(
   const test = await runTest(deps, session, "datto_bcdr", credentials, integrationId);
   if (test.outcome !== "ok") return { status: "error", message: `Not saved. ${test.message}` };
 
-  const updated = await deps.db.withTenant(session.tenantId, (context) =>
-    replaceIntegrationCredentials(context, deps.keyProvider, {
-      id: integrationId,
-      credentials,
-      credentialHint: dattoCredentialHint(publicKey),
-      actorUserId: session.userId,
-      ip: deps.ip ?? null,
-    }),
+  const updated = await unlessKeyServiceDown(
+    deps.db.withTenant(session.tenantId, (context) =>
+      replaceIntegrationCredentials(context, deps.keyProvider, {
+        id: integrationId,
+        credentials,
+        credentialHint: dattoCredentialHint(publicKey),
+        actorUserId: session.userId,
+        ip: deps.ip ?? null,
+      }),
+    ),
   );
+  if (updated === KEY_SERVICE_DOWN) return { status: "error", message: KEY_SERVICE_DOWN_MESSAGE };
   if (!updated) return { status: "error", message: NOT_FOUND };
   return { status: "ok", message: "Keys replaced. The next sync uses the new key pair." };
 }
@@ -472,16 +511,20 @@ export async function connectVspc(
   const test = await runTest(deps, session, "veeam_vspc", credentials, null);
   if (test.outcome !== "ok") return { status: "error", message: `Not saved. ${test.message}` };
 
-  const integration = await deps.db.withTenant(session.tenantId, (context) =>
-    createIntegration(context, deps.keyProvider, {
-      vendor: "veeam_vspc",
-      name,
-      credentials,
-      credentialHint: vspcCredentialHint({ serverUrl, apiKey }),
-      actorUserId: session.userId,
-      ip: deps.ip ?? null,
-    }),
+  const integration = await unlessKeyServiceDown(
+    deps.db.withTenant(session.tenantId, (context) =>
+      createIntegration(context, deps.keyProvider, {
+        vendor: "veeam_vspc",
+        name,
+        credentials,
+        credentialHint: vspcCredentialHint({ serverUrl, apiKey }),
+        actorUserId: session.userId,
+        ip: deps.ip ?? null,
+      }),
+    ),
   );
+  if (integration === KEY_SERVICE_DOWN)
+    return { status: "error", message: KEY_SERVICE_DOWN_MESSAGE };
   return {
     status: "ok",
     message: `${name} is connected. The first sync starts within a few minutes.`,
@@ -515,15 +558,18 @@ export async function replaceVspcCredentials(
   const test = await runTest(deps, session, "veeam_vspc", credentials, integrationId);
   if (test.outcome !== "ok") return { status: "error", message: `Not saved. ${test.message}` };
 
-  const updated = await deps.db.withTenant(session.tenantId, (context) =>
-    replaceIntegrationCredentials(context, deps.keyProvider, {
-      id: integrationId,
-      credentials,
-      credentialHint: vspcCredentialHint({ serverUrl, apiKey }),
-      actorUserId: session.userId,
-      ip: deps.ip ?? null,
-    }),
+  const updated = await unlessKeyServiceDown(
+    deps.db.withTenant(session.tenantId, (context) =>
+      replaceIntegrationCredentials(context, deps.keyProvider, {
+        id: integrationId,
+        credentials,
+        credentialHint: vspcCredentialHint({ serverUrl, apiKey }),
+        actorUserId: session.userId,
+        ip: deps.ip ?? null,
+      }),
+    ),
   );
+  if (updated === KEY_SERVICE_DOWN) return { status: "error", message: KEY_SERVICE_DOWN_MESSAGE };
   if (!updated) return { status: "error", message: NOT_FOUND };
   return { status: "ok", message: "Connection details replaced. The next sync uses them." };
 }
@@ -603,16 +649,20 @@ export async function connectUniview(
   const test = await runTest(deps, session, "kaseya_uniview", credentials, null);
   if (test.outcome !== "ok") return { status: "error", message: `Not saved. ${test.message}` };
 
-  const integration = await deps.db.withTenant(session.tenantId, (context) =>
-    createIntegration(context, deps.keyProvider, {
-      vendor: "kaseya_uniview",
-      name,
-      credentials,
-      credentialHint: univiewCredentialHint({ clientId, clientSecret }),
-      actorUserId: session.userId,
-      ip: deps.ip ?? null,
-    }),
+  const integration = await unlessKeyServiceDown(
+    deps.db.withTenant(session.tenantId, (context) =>
+      createIntegration(context, deps.keyProvider, {
+        vendor: "kaseya_uniview",
+        name,
+        credentials,
+        credentialHint: univiewCredentialHint({ clientId, clientSecret }),
+        actorUserId: session.userId,
+        ip: deps.ip ?? null,
+      }),
+    ),
   );
+  if (integration === KEY_SERVICE_DOWN)
+    return { status: "error", message: KEY_SERVICE_DOWN_MESSAGE };
   return {
     status: "ok",
     message: `${name} is connected. The first sync starts within a few minutes.`,
@@ -648,15 +698,18 @@ export async function replaceUniviewCredentials(
   const test = await runTest(deps, session, "kaseya_uniview", credentials, integrationId);
   if (test.outcome !== "ok") return { status: "error", message: `Not saved. ${test.message}` };
 
-  const updated = await deps.db.withTenant(session.tenantId, (context) =>
-    replaceIntegrationCredentials(context, deps.keyProvider, {
-      id: integrationId,
-      credentials,
-      credentialHint: univiewCredentialHint({ clientId, clientSecret }),
-      actorUserId: session.userId,
-      ip: deps.ip ?? null,
-    }),
+  const updated = await unlessKeyServiceDown(
+    deps.db.withTenant(session.tenantId, (context) =>
+      replaceIntegrationCredentials(context, deps.keyProvider, {
+        id: integrationId,
+        credentials,
+        credentialHint: univiewCredentialHint({ clientId, clientSecret }),
+        actorUserId: session.userId,
+        ip: deps.ip ?? null,
+      }),
+    ),
   );
+  if (updated === KEY_SERVICE_DOWN) return { status: "error", message: KEY_SERVICE_DOWN_MESSAGE };
   if (!updated) return { status: "error", message: NOT_FOUND };
   return { status: "ok", message: "Connection details replaced. The next sync uses them." };
 }
