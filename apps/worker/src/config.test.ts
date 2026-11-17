@@ -14,6 +14,7 @@ describe("worker configuration", () => {
       syncIntervalMinutes: 15,
       syncConcurrency: 5,
       schedulerTickSeconds: 60,
+      notificationTickSeconds: 30,
       dattoBaseUrl: undefined,
       logLevel: "info",
     });
@@ -32,6 +33,7 @@ describe("worker configuration", () => {
       syncIntervalMinutes: 30,
       syncConcurrency: 2,
       schedulerTickSeconds: 60,
+      notificationTickSeconds: 30,
       dattoBaseUrl: undefined,
       logLevel: "debug",
     });

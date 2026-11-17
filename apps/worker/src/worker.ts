@@ -1,7 +1,15 @@
-import type { KeyProvider, Logger } from "@valtrexia/core/server";
+import type { KeyProvider, Logger, OutboundPolicy, Resolver } from "@valtrexia/core/server";
 import type { Db } from "@valtrexia/db";
 import { Queue, Worker } from "bullmq";
 import {
+  deliverDueNotifications,
+  type DeliveryDeps,
+  type DeliveryResult,
+} from "./notifications/deliver";
+import {
+  DELIVER_JOB,
+  DELIVER_SCHEDULER_ID,
+  NOTIFICATION_QUEUE,
   parseSyncJob,
   QUEUE_PREFIX,
   redisConnection,
@@ -22,17 +30,24 @@ export interface WorkerOptions {
   syncIntervalMinutes: number;
   syncConcurrency: number;
   schedulerTickSeconds: number;
+  /** How often to look for notifications to send. Default 30 seconds. */
+  notificationTickSeconds?: number;
+  /** What tenant-supplied destinations may be. Strict unless set for local development. */
+  outboundPolicy?: OutboundPolicy;
   dattoBaseUrl?: string | undefined;
   /** Redis key prefix. Tests use their own so they never see each other's jobs. */
   prefix?: string;
   /** For tests. */
   now?: SyncDeps["now"];
   connectorFactory?: SyncDeps["connectorFactory"];
+  resolver?: Resolver;
 }
 
 export interface RunningWorker {
   /** Runs one scheduler tick immediately, without waiting for the timer. */
   tickNow(): Promise<TickResult>;
+  /** Sends the notifications that are due now, without waiting for the timer. */
+  deliverNow(): Promise<DeliveryResult[]>;
   /** The sync queue, for inspection. */
   syncQueue: Queue;
   /** Stops taking new work, lets running syncs finish, and closes connections. */
@@ -57,6 +72,17 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
 
   const syncQueue = new Queue(SYNC_QUEUE, { connection, prefix });
   const schedulerQueue = new Queue(SCHEDULER_QUEUE, { connection, prefix });
+  const notificationQueue = new Queue(NOTIFICATION_QUEUE, { connection, prefix });
+
+  const deliveryDeps: DeliveryDeps = {
+    db,
+    keyProvider: options.keyProvider,
+    logger,
+    outboundPolicy: options.outboundPolicy ?? {},
+    ...(options.now ? { now: options.now } : {}),
+    ...(options.resolver ? { resolver: options.resolver } : {}),
+  };
+  const deliver = () => deliverDueNotifications(deliveryDeps);
 
   const tick = () =>
     enqueueDueSyncs({
@@ -107,9 +133,21 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
     { connection, prefix, concurrency: options.syncConcurrency },
   );
 
+  // One delivery run at a time across all worker processes: the job runs on
+  // a single schedule, and each batch is claimed before it is sent.
+  const notificationWorker = new Worker(
+    NOTIFICATION_QUEUE,
+    async () => {
+      const results = await deliver();
+      return { sent: results.filter((r) => r.result === "sent").length, total: results.length };
+    },
+    { connection, prefix, concurrency: 1 },
+  );
+
   for (const [name, worker] of [
     ["scheduler", schedulerWorker],
     ["sync", syncWorker],
+    ["notifications", notificationWorker],
   ] as const) {
     // Connection-level problems (Redis restarting, for example). Without a
     // listener an "error" event would crash the process.
@@ -128,7 +166,17 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
     { name: TICK_JOB, opts: { removeOnComplete: true, removeOnFail: 20 } },
   );
 
-  await Promise.all([schedulerWorker.waitUntilReady(), syncWorker.waitUntilReady()]);
+  await notificationQueue.upsertJobScheduler(
+    DELIVER_SCHEDULER_ID,
+    { every: (options.notificationTickSeconds ?? 30) * 1000 },
+    { name: DELIVER_JOB, opts: { removeOnComplete: true, removeOnFail: 20 } },
+  );
+
+  await Promise.all([
+    schedulerWorker.waitUntilReady(),
+    syncWorker.waitUntilReady(),
+    notificationWorker.waitUntilReady(),
+  ]);
   logger.info(
     {
       syncIntervalMinutes: options.syncIntervalMinutes,
@@ -140,12 +188,14 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
 
   return {
     tickNow: tick,
+    deliverNow: deliver,
     syncQueue,
     async close() {
       // Workers first: close() waits for a running sync to finish.
       await schedulerWorker.close();
+      await notificationWorker.close();
       await syncWorker.close();
-      await Promise.all([schedulerQueue.close(), syncQueue.close()]);
+      await Promise.all([schedulerQueue.close(), syncQueue.close(), notificationQueue.close()]);
       logger.info("worker stopped");
     },
   };

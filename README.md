@@ -8,7 +8,7 @@ Version 1 is **read-only**. It never starts, stops or changes a backup job.
 
 ## Status
 
-Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and tested. Phase 2 is under way, following [PLAN-PHASE-2.md](./PLAN-PHASE-2.md): steps 1 to 5 of 12 are done (continuous integration; handling of vendor data that stops arriving; the stale-backup rule; asset settings and mute; the incidents page, audit log and workspace settings). It is **not production-ready**. Three things have never been run against the real system they depend on, and several production requirements are not built.
+Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and tested. Phase 2 is under way, following [PLAN-PHASE-2.md](./PLAN-PHASE-2.md): steps 1 to 6 of 12 are done (continuous integration; handling of vendor data that stops arriving; the stale-backup rule; asset settings and mute; the incidents page, audit log and workspace settings; the notification outbox and signed webhooks). It is **not production-ready**. Three things have never been run against the real system they depend on, and several production requirements are not built.
 
 **What works, verified here:**
 
@@ -25,7 +25,7 @@ Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and test
 | Datto BCDR      | The connector has never called Datto. Its response shapes are assumptions; see [Datto BCDR](#datto-bcdr) for the list to check. |
 | 3D view         | Only run with software rendering, never on a graphics card.                                                                     |
 
-**What is not built:** the production key provider (KMS), the Unitrends and VSPC connectors, notifications, and the items listed in [SECURITY.md](./SECURITY.md).
+**What is not built:** the production key provider (KMS), the Unitrends and VSPC connectors, email notifications and the page for managing notification channels, and the items listed in [SECURITY.md](./SECURITY.md).
 
 ### Before production
 
@@ -370,7 +370,55 @@ An incident is a problem with one asset that stays open until it resolves, so a 
 - At most one incident of each type is open per asset, enforced by a database index.
 - Who acknowledged an incident is kept after it closes. A new failure after a closure is a new incident.
 
-Incidents are in-app only so far. Sending them anywhere (email, a webhook) is planned in [PLAN-PHASE-2.md](./PLAN-PHASE-2.md) and not built.
+Opened and closed incidents are also sent to notification channels: see [Notifications](#notifications).
+
+## Notifications
+
+When incidents open or close, or an integration becomes unhealthy or recovers, the people who asked are told. Webhooks work now. Email, and the page for managing channels, come next (step 7 of [PLAN-PHASE-2.md](./PLAN-PHASE-2.md)); until then a channel can only be created in code.
+
+**What is sent, and to whom.** A channel chooses which incident types it hears about (failed, missed, stale), whether it hears about openings, closings or both, and whether it hears about integration health.
+
+- **One message per sync, not per asset.** A sync that opens forty incidents because a client's appliance died sends each channel one message listing all forty. Over 100 changes are split into messages of 100.
+- **Never the same thing twice.** Each channel is told about each event of each incident once. The sync checks before queuing, and a unique key on the delivery record enforces it whatever a retry or a crash does.
+- **Nothing about decisions.** An incident closed because someone muted the asset, or the vendor paused or archived it, is not reported. A brief sync failure that clears by itself is not reported either: an integration is reported once when it becomes unhealthy (four failures in a row, or a rejected key), and once when it recovers.
+- **Names and times, nothing else.** A message names the workspace, client, asset, incident type and times. It never contains credentials or a vendor's raw payload.
+
+**How it is sent.** Messages are written to an outbox table in the same transaction as the change they report, so a message exists exactly when its change does. A worker job, every 30 seconds by default, finds the messages that are due and sends them.
+
+| Situation                                      | What happens                                                                                        |
+| ---------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| The endpoint answers 2xx                       | Sent                                                                                                |
+| Any other answer, a timeout, no connection     | Tried again after 1, 5, 15, 30, 60, 120 and 240 minutes, then given up: 8 attempts in about 8 hours |
+| The endpoint answers 410 Gone                  | Given up at once                                                                                    |
+| The destination is not allowed (see below)     | Given up at once                                                                                    |
+| The channel was turned off after it was queued | Not sent                                                                                            |
+
+Each attempt first claims the message for two minutes, so two workers never send it at once. If a worker dies after sending but before recording it, the message is sent again when the claim runs out. That is the one way a receiver can get a message twice, and every attempt at a message carries the same `webhook-id`, so a receiver can recognize the repeat. Exactly-once delivery is not something any sender can promise.
+
+### Webhooks
+
+A webhook channel `POST`s JSON to an https URL. Requests are signed following the [Standard Webhooks](https://www.standardwebhooks.com) specification, so a receiver can verify them with an existing library:
+
+| Header              | Value                                                                                    |
+| ------------------- | ---------------------------------------------------------------------------------------- |
+| `webhook-id`        | The message's id, the same on every retry                                                |
+| `webhook-timestamp` | When this attempt was sent, in seconds                                                   |
+| `webhook-signature` | `v1,` and the base64 HMAC-SHA256 of `<id>.<timestamp>.<body>` under the channel's secret |
+
+A receiver should check the signature and refuse a timestamp more than five minutes from its own clock, so a captured request cannot be replayed. The signing secret is shown once, when the channel is created, and stored encrypted like vendor credentials. So is the URL, because webhook URLs often carry a token in the path. Nobody can read either back afterwards; the interface and the audit log show only the host.
+
+The body is `{ "type", "version", "timestamp", "data" }`, with `type` one of `incidents.changed`, `integration.unhealthy`, `integration.recovered` or `test`.
+
+### Sending to addresses a tenant typed in
+
+The server, not the tenant, makes the connection to a webhook URL. Without care, a tenant could point it at the server's own network: `localhost`, a database, or a cloud metadata address. So every destination is checked when the channel is saved, and again at every send:
+
+- https only, no user name or password in the URL, and port 443 or 1024 and above;
+- the host name is resolved, and refused if any address it resolves to is loopback, private, link-local (including `169.254.169.254`), carrier-grade NAT, multicast, reserved, or an IPv6 form of any of those;
+- the connection is made to the addresses that were checked, from the same DNS answer, so a second answer cannot swap the target in between;
+- redirects are never followed, a request may take 10 seconds, and only a bounded amount of any response is read. The response body is never stored, logged or shown.
+
+For testing a receiver on your own machine, `VALTREXIA_ALLOW_PRIVATE_DESTINATIONS=true` allows http and private addresses. It is ignored when `NODE_ENV=production`.
 
 ## How backup health is decided
 
@@ -417,7 +465,7 @@ This is worked out each time a page is read (`statusInView`), from the stored st
 | `unhealthy` | Four failures in a row (an hour by default), or one failure the vendor will repeat: a rejected key, or saved credentials that cannot be read |
 | `stalled`   | Nothing is failing, but no sync has finished for more than three intervals                                                                   |
 
-A successful sync, or replacing the credentials, ends a run of failures. The worker logs a warning when an integration becomes unhealthy and a line when it recovers. Notifications for both arrive with the alerting work in [PLAN-PHASE-2.md](./PLAN-PHASE-2.md).
+A successful sync, or replacing the credentials, ends a run of failures. The worker logs a warning when an integration becomes unhealthy and a line when it recovers. Each transition is also sent to notification channels that ask for it: see [Notifications](#notifications).
 
 The web app and the worker must be given the same `SYNC_INTERVAL_MINUTES`, since the web app uses it to judge freshness. Each refuses a value that is not a whole number from 1 to 1440, and a test checks that they accept and refuse the same values.
 

@@ -16,3 +16,23 @@ export {
 export { Secret } from "./crypto/secret";
 export { createLogger, type CreateLoggerOptions, type Logger } from "./logging/logger";
 export { isSensitiveKey, redact, REDACTED, scrubString } from "./logging/redact";
+export {
+  isPublicAddress,
+  OutboundFailedError,
+  outboundPolicyFromEnv,
+  OutboundRefusedError,
+  parseOutboundUrl,
+  postJson,
+  resolvePublicAddresses,
+  type OutboundPolicy,
+  type OutboundRefusal,
+  type PostJsonOptions,
+  type ResolvedAddress,
+  type Resolver,
+} from "./net/outbound";
+export {
+  generateWebhookSecret,
+  signWebhook,
+  verifyWebhook,
+  type WebhookMessage,
+} from "./notifications/webhook-signature";

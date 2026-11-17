@@ -16,6 +16,8 @@ const schema = z.object({
   SYNC_CONCURRENCY: number(1, 50, 5),
   /** How often the scheduler looks for integrations that are due. */
   SCHEDULER_TICK_SECONDS: number(5, 3600, 60),
+  /** How often the worker looks for notifications to send. */
+  NOTIFICATION_TICK_SECONDS: number(5, 3600, 30),
   DATTO_API_BASE_URL: z.preprocess(blankToUndefined, z.url().optional()),
   LOG_LEVEL: z.preprocess(
     blankToUndefined,
@@ -29,6 +31,7 @@ export interface WorkerConfig {
   syncIntervalMinutes: number;
   syncConcurrency: number;
   schedulerTickSeconds: number;
+  notificationTickSeconds: number;
   dattoBaseUrl: string | undefined;
   logLevel: string;
 }
@@ -54,6 +57,7 @@ export function parseConfig(env: Record<string, string | undefined>): WorkerConf
     syncIntervalMinutes: value.SYNC_INTERVAL_MINUTES,
     syncConcurrency: value.SYNC_CONCURRENCY,
     schedulerTickSeconds: value.SCHEDULER_TICK_SECONDS,
+    notificationTickSeconds: value.NOTIFICATION_TICK_SECONDS,
     dattoBaseUrl: value.DATTO_API_BASE_URL,
     logLevel: value.LOG_LEVEL,
   };

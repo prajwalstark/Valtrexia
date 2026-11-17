@@ -27,6 +27,11 @@ export interface TransactionOptions {
   maxWaitMs?: number;
 }
 
+export interface DueNotificationBatch {
+  batchId: string;
+  tenantId: string;
+}
+
 export interface DueIntegration {
   integrationId: string;
   tenantId: string;
@@ -60,6 +65,12 @@ export interface Db {
     intervalMinutes: number;
     limit?: number;
   }): Promise<DueIntegration[]>;
+
+  /**
+   * Notification batches waiting to be sent whose time has come, across all
+   * tenants. Ids only; each is then claimed and sent inside its own tenant.
+   */
+  listDueNotificationBatches(input?: { limit?: number }): Promise<DueNotificationBatch[]>;
 
   /**
    * Throws unless the connection's role is safe to serve tenants with: not a
@@ -124,6 +135,13 @@ export function createDb({ url, maxConnections = 10 }: CreateDbOptions): Db {
         FROM list_due_integrations(make_interval(mins => ${Math.floor(intervalMinutes)}::int), ${Math.floor(limit)}::int)
       `;
       return rows.map((row) => ({ integrationId: row.integration_id, tenantId: row.tenant_id }));
+    },
+
+    async listDueNotificationBatches({ limit = 200 } = {}) {
+      const rows = await prisma.$queryRaw<{ batch_id: string; tenant_id: string }[]>`
+        SELECT batch_id, tenant_id FROM list_due_notification_batches(${Math.floor(limit)}::int)
+      `;
+      return rows.map((row) => ({ batchId: row.batch_id, tenantId: row.tenant_id }));
     },
 
     async assertSafeRole() {

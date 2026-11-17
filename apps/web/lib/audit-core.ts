@@ -16,6 +16,7 @@ export const AUDIT_CATEGORIES = {
   assets: { label: "Assets", prefixes: ["asset."] },
   incidents: { label: "Incidents", prefixes: ["incident."] },
   integrations: { label: "Integrations", prefixes: ["integration."] },
+  notifications: { label: "Notifications", prefixes: ["notification_channel."] },
   people: { label: "People", prefixes: ["user."] },
   workspace: { label: "Workspace", prefixes: ["workspace.", "tenant."] },
 } as const satisfies Record<string, { label: string; prefixes: readonly string[] }>;
@@ -183,6 +184,14 @@ export function describeAuditEntry(
       return `${user} was removed from the workspace`;
     case "user.role_changed":
       return `${user} changed from ${text(meta.from) ?? "?"} to ${text(meta.to) ?? "?"}`;
+    case "notification_channel.created": {
+      const host = text(meta.host);
+      return `Added the ${text(meta.type) ?? "notification"} channel ${text(meta.name) ?? "?"}${
+        host ? `, sending to ${host}` : ""
+      }`;
+    }
+    case "notification_channel.deleted":
+      return `Deleted the ${text(meta.type) ?? "notification"} channel ${text(meta.name) ?? "?"}`;
     case "tenant.provisioned":
       return "Created the workspace";
     case "workspace.settings_changed": {

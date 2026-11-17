@@ -24,7 +24,7 @@ export interface EncryptionContext {
   /** The record the value belongs to, for example an integration id. */
   recordId: string;
   /** What the value is, so the same record can hold more than one secret. */
-  purpose: "integration-credentials";
+  purpose: "integration-credentials" | "notification-channel";
 }
 
 const envelopeSchema = z.strictObject({

@@ -76,6 +76,41 @@ enum IncidentType {
   @@map("incident_type")
 }
 
+enum NotificationChannelType {
+  webhook
+  email
+
+  @@map("notification_channel_type")
+}
+
+/// What one message to a channel is about.
+enum NotificationBatchKind {
+  /// Incidents that opened or closed in one sync.
+  incidents
+  /// An integration became unhealthy, or recovered.
+  integration
+  /// A test message someone asked for.
+  test
+
+  @@map("notification_batch_kind")
+}
+
+enum NotificationBatchStatus {
+  pending
+  sent
+  /// Every attempt failed. Not tried again.
+  failed
+
+  @@map("notification_batch_status")
+}
+
+enum IncidentEvent {
+  opened
+  closed
+
+  @@map("incident_event")
+}
+
 enum UserRole {
   owner
   technician
@@ -102,14 +137,17 @@ model Tenant {
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt  DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  users                User[]
-  integrations         Integration[]
-  clients              Client[]
-  vendorClientMappings VendorClientMapping[]
-  assets               Asset[]
-  backupResults        BackupResult[]
-  incidents            Incident[]
-  auditLogs            AuditLog[]
+  users                  User[]
+  integrations           Integration[]
+  clients                Client[]
+  vendorClientMappings   VendorClientMapping[]
+  assets                 Asset[]
+  backupResults          BackupResult[]
+  incidents              Incident[]
+  auditLogs              AuditLog[]
+  notificationChannels   NotificationChannel[]
+  notificationBatches    NotificationBatch[]
+  notificationDeliveries NotificationDelivery[]
 
   @@map("tenants")
 }
@@ -158,6 +196,8 @@ model Integration {
   consecutiveFailures Int            @default(0) @map("consecutive_failures")
   /// When the current run of failures began. Null when the last sync succeeded.
   failingSince        DateTime?      @map("failing_since") @db.Timestamptz(3)
+  /// When it was reported unhealthy. Cleared by the next successful sync, which reports the recovery.
+  unhealthySince      DateTime?      @map("unhealthy_since") @db.Timestamptz(3)
   createdAt           DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt           DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -308,6 +348,9 @@ model Incident {
   asset          Asset  @relation(fields: [tenantId, assetId], references: [tenantId, id], onDelete: Cascade)
   acknowledgedBy User?  @relation(fields: [tenantId, acknowledgedByUserId], references: [tenantId, id], onDelete: NoAction)
 
+  notificationDeliveries NotificationDelivery[]
+
+  @@unique([tenantId, id])
   @@index([tenantId, closedAt])
   @@index([tenantId, assetId])
   @@map("incidents")
@@ -334,4 +377,83 @@ model AuditLog {
 
   @@index([tenantId, createdAt(sort: Desc)])
   @@map("audit_logs")
+}
+
+/// Somewhere notifications are sent: a webhook endpoint or a set of email
+/// recipients, with what it wants to be told about.
+model NotificationChannel {
+  id                      String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId                String                  @map("tenant_id") @db.Uuid
+  type                    NotificationChannelType
+  name                    String
+  enabled                 Boolean                 @default(true)
+  /// Incident types it is told about.
+  incidentTypes           IncidentType[]          @map("incident_types")
+  notifyOpened            Boolean                 @default(true) @map("notify_opened")
+  notifyClosed            Boolean                 @default(true) @map("notify_closed")
+  notifyIntegrationHealth Boolean                 @default(true) @map("notify_integration_health")
+  /// What may be shown in the interface: a hint of the destination, never the destination itself.
+  config                  Json                    @default("{}")
+  /// Envelope-encrypted destination and signing secret. Never selected for the browser.
+  secretEnc               Json                    @map("secret_enc")
+  createdAt               DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt               DateTime                @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant     Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  batches    NotificationBatch[]
+  deliveries NotificationDelivery[]
+
+  @@unique([tenantId, name])
+  @@unique([tenantId, id])
+  @@map("notification_channels")
+}
+
+/// One message to one channel, waiting to be sent or already sent. Written in
+/// the same transaction as the change it reports, so the two cannot disagree.
+model NotificationBatch {
+  id            String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId      String                  @map("tenant_id") @db.Uuid
+  channelId     String                  @map("channel_id") @db.Uuid
+  kind          NotificationBatchKind
+  /// What the message says, captured when it was written. Never credentials or vendor payloads.
+  payload       Json
+  status        NotificationBatchStatus @default(pending)
+  /// Attempts made so far.
+  attempts      Int                     @default(0)
+  nextAttemptAt DateTime                @default(now()) @map("next_attempt_at") @db.Timestamptz(3)
+  /// Sanitized reason the last attempt failed.
+  lastError     String?                 @map("last_error")
+  sentAt        DateTime?               @map("sent_at") @db.Timestamptz(3)
+  createdAt     DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime                @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant     Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  channel    NotificationChannel    @relation(fields: [tenantId, channelId], references: [tenantId, id], onDelete: Cascade)
+  deliveries NotificationDelivery[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, channelId, createdAt(sort: Desc)])
+  @@map("notification_batches")
+}
+
+/// That a channel has been told about one event of one incident. The unique
+/// key is the guarantee that it is never told twice, whatever a retry or a
+/// crash does.
+model NotificationDelivery {
+  id         String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String        @map("tenant_id") @db.Uuid
+  channelId  String        @map("channel_id") @db.Uuid
+  incidentId String        @map("incident_id") @db.Uuid
+  event      IncidentEvent
+  batchId    String        @map("batch_id") @db.Uuid
+  createdAt  DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant   Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  channel  NotificationChannel @relation(fields: [tenantId, channelId], references: [tenantId, id], onDelete: Cascade)
+  incident Incident            @relation(fields: [tenantId, incidentId], references: [tenantId, id], onDelete: Cascade)
+  batch    NotificationBatch   @relation(fields: [tenantId, batchId], references: [tenantId, id], onDelete: Cascade)
+
+  @@unique([incidentId, event, channelId])
+  @@index([tenantId, batchId])
+  @@map("notification_deliveries")
 }

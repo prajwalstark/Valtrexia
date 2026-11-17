@@ -7,6 +7,7 @@ export {
   type CreateDbOptions,
   type Db,
   type DueIntegration,
+  type DueNotificationBatch,
   type TenantContext,
   type TenantTx,
   type TransactionOptions,
@@ -34,6 +35,24 @@ export {
   type IntegrationSummary,
   type ReplaceCredentialsInput,
 } from "./repositories/integrations";
+export {
+  channelSummarySelect,
+  ChannelNameTakenError,
+  claimNotificationBatch,
+  createWebhookChannel,
+  decryptChannelDestination,
+  deleteNotificationChannel,
+  finishNotificationBatch,
+  listNotificationChannels,
+  queueIncidentNotifications,
+  queueIntegrationHealthNotifications,
+  queueTestNotification,
+  type BatchOutcome,
+  type ChannelPreferencesInput,
+  type ChannelSummary,
+  type ClaimedBatch,
+  type WebhookDestination,
+} from "./repositories/notifications";
 export {
   ActorType,
   BackupStatus,

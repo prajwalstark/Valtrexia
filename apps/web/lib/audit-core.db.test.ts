@@ -360,6 +360,19 @@ describe("describeAuditEntry", () => {
     ).toBe("Tested new Datto BCDR keys before saving them: it succeeded");
   });
 
+  it("describes notification channels by name and host, never by full URL", () => {
+    expect(
+      say("notification_channel.created", randomUUID(), {
+        type: "webhook",
+        name: "Ops",
+        host: "hooks.example.com",
+      }),
+    ).toBe("Added the webhook channel Ops, sending to hooks.example.com");
+    expect(
+      say("notification_channel.deleted", randomUUID(), { type: "webhook", name: "Ops" }),
+    ).toBe("Deleted the webhook channel Ops");
+  });
+
   it("describes people and the workspace", () => {
     expect(say("user.joined", USER, { role: "technician" })).toBe(
       "Terry Tech joined as technician",

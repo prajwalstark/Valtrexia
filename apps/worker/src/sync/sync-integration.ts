@@ -24,6 +24,7 @@ import {
   isCompletedBackup,
   SYNC_INTERVAL_MINUTES,
   type BackupStatus,
+  type IncidentChange,
   type MissedBackupVerdict,
   type RaisedIncidentType,
   type SlaVerdict,
@@ -36,7 +37,13 @@ import {
   type Logger,
   type Secret,
 } from "@valtrexia/core/server";
-import { decryptIntegrationCredentials, Prisma, type Db } from "@valtrexia/db";
+import {
+  decryptIntegrationCredentials,
+  Prisma,
+  queueIncidentNotifications,
+  queueIntegrationHealthNotifications,
+  type Db,
+} from "@valtrexia/db";
 
 const HOUR_MS = 3_600_000;
 /** How far back the first sync of an integration reaches. */
@@ -96,6 +103,8 @@ export interface SyncSummary {
   verdicts: AssetVerdict[];
   incidentsOpened: number;
   incidentsClosed: number;
+  /** Notification messages queued by this sync. */
+  notificationsQueued: number;
   since: Date;
 }
 
@@ -137,6 +146,8 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
         consecutiveFailures: true,
         failingSince: true,
         lastSyncErrorKind: true,
+        unhealthySince: true,
+        name: true,
       },
     });
     if (!integration) throw new IntegrationNotFoundError();
@@ -359,6 +370,7 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
           unknown: 0,
         };
         const verdicts: AssetVerdict[] = [];
+        const lastBackupByAsset = new Map<string, Date | null>();
 
         for (const asset of assetByVendorId.values()) {
           const fetched = fetchedByAsset.get(asset.id) ?? [];
@@ -412,6 +424,7 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
             });
           }
           statusCounts[currentStatus] += 1;
+          lastBackupByAsset.set(asset.id, lastSuccessAt);
           verdicts.push({ assetId: asset.id, verdict, sla, currentStatus, lastResultStatus });
         }
 
@@ -424,8 +437,9 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
             type: { in: [...RAISED_INCIDENT_TYPES] },
             asset: { integrationId },
           },
-          select: { id: true, assetId: true, type: true },
+          select: { id: true, assetId: true, type: true, openedAt: true },
         });
+        const openedAtById = new Map(openIncidents.map((i) => [i.id, i.openedAt]));
         const openByAsset = new Map<string, Map<RaisedIncidentType, string>>();
         for (const incident of openIncidents) {
           const types = openByAsset.get(incident.assetId) ?? new Map<RaisedIncidentType, string>();
@@ -434,7 +448,12 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
         }
 
         const toOpen: Prisma.IncidentCreateManyInput[] = [];
-        const toClose: string[] = [];
+        const toClose: {
+          id: string;
+          assetId: string;
+          type: RaisedIncidentType;
+          suppressed: boolean;
+        }[] = [];
         for (const entry of verdicts) {
           const open = openByAsset.get(entry.assetId);
           const plan = planIncidents({
@@ -446,14 +465,92 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
           for (const type of plan.open) {
             toOpen.push({ tenantId, assetId: entry.assetId, type, openedAt: now });
           }
-          for (const type of plan.close) toClose.push(open!.get(type)!);
+          for (const type of plan.close) {
+            toClose.push({
+              id: open!.get(type)!,
+              assetId: entry.assetId,
+              type,
+              // Closed because nobody is watching it, not because it recovered.
+              suppressed: entry.verdict.state === "suppressed",
+            });
+          }
         }
-        if (toOpen.length > 0) await tx.incident.createMany({ data: toOpen });
+        const opened =
+          toOpen.length > 0
+            ? await tx.incident.createManyAndReturn({
+                data: toOpen,
+                select: { id: true, assetId: true, type: true, openedAt: true },
+              })
+            : [];
         if (toClose.length > 0) {
           await tx.incident.updateMany({
-            where: { id: { in: toClose }, closedAt: null },
+            where: { id: { in: toClose.map((incident) => incident.id) }, closedAt: null },
             data: { closedAt: now },
           });
+        }
+
+        // Notifications ......................................................
+        // Queued in the same transaction, so a message exists exactly when
+        // the incident change it reports does. The worker sends them later.
+        let notificationsQueued = 0;
+        if (opened.length > 0 || toClose.length > 0) {
+          const assetById = new Map([...assetByVendorId.values()].map((a) => [a.id, a]));
+          const clientIds = [...new Set([...assetById.values()].map((a) => a.clientId))];
+          const clients = await tx.client.findMany({
+            where: { id: { in: clientIds } },
+            select: { id: true, name: true },
+          });
+          const clientName = new Map(clients.map((c) => [c.id, c.name]));
+          const describe = (assetId: string) => {
+            const asset = assetById.get(assetId)!;
+            return {
+              client: { id: asset.clientId, name: clientName.get(asset.clientId) ?? "" },
+              asset: { id: asset.id, name: asset.name },
+              lastBackupAt: lastBackupByAsset.get(asset.id) ?? null,
+            };
+          };
+          const changes: IncidentChange[] = [
+            ...opened.map((incident) => ({
+              incidentId: incident.id,
+              type: incident.type as RaisedIncidentType,
+              event: "opened" as const,
+              reason: null,
+              openedAt: incident.openedAt,
+              closedAt: null,
+              ...describe(incident.assetId),
+            })),
+            ...toClose.map((incident) => ({
+              incidentId: incident.id,
+              type: incident.type,
+              event: "closed" as const,
+              reason: incident.suppressed ? ("suppressed" as const) : ("resolved" as const),
+              openedAt: openedAtById.get(incident.id) ?? now,
+              closedAt: now,
+              ...describe(incident.assetId),
+            })),
+          ];
+          notificationsQueued += await queueIncidentNotifications(
+            { tx, tenantId },
+            { changes, now },
+          );
+        }
+        if (started.integration.unhealthySince) {
+          // It had been reported unhealthy. Say that it has recovered, once.
+          notificationsQueued += await queueIntegrationHealthNotifications(
+            { tx, tenantId },
+            {
+              now,
+              state: "recovered",
+              integration: {
+                id: integrationId,
+                name: started.integration.name,
+                vendor: started.integration.vendor,
+              },
+              failingSince: started.integration.failingSince,
+              error: null,
+              needsAction: false,
+            },
+          );
         }
 
         await tx.integration.update({
@@ -465,6 +562,7 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
             lastSyncErrorKind: null,
             consecutiveFailures: 0,
             failingSince: null,
+            unhealthySince: null,
           },
         });
 
@@ -479,6 +577,7 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
           verdicts,
           incidentsOpened: toOpen.length,
           incidentsClosed: toClose.length,
+          notificationsQueued,
           since,
         } satisfies SyncSummary;
       },
@@ -520,14 +619,6 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
       consecutiveFailures: before.consecutiveFailures + 1,
       failingSince: before.failingSince ?? now,
     };
-    await db
-      .withTenant(target.tenantId, ({ tx }) =>
-        tx.integration.update({ where: { id: target.integrationId }, data: failure }),
-      )
-      .catch((secondary: unknown) => {
-        log.error({ err: secondary }, "could not record the sync failure");
-      });
-
     const health = (integration: {
       syncStatus: "running" | "error";
       consecutiveFailures: number;
@@ -540,11 +631,36 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
         createdAt: before.createdAt,
         syncIntervalMinutes,
         ...integration,
-      }).state;
-    if (
-      health({ ...before, syncStatus: "running" }) !== "unhealthy" &&
-      health(failure) === "unhealthy"
-    ) {
+      });
+    const after = health(failure);
+    // Said once per run of failures: `unhealthySince` records that it was.
+    const becameUnhealthy = after.state === "unhealthy" && before.unhealthySince === null;
+
+    await db
+      .withTenant(target.tenantId, async ({ tx, tenantId }) => {
+        await tx.integration.update({
+          where: { id: target.integrationId },
+          data: { ...failure, ...(becameUnhealthy ? { unhealthySince: now } : {}) },
+        });
+        if (becameUnhealthy) {
+          await queueIntegrationHealthNotifications(
+            { tx, tenantId },
+            {
+              now,
+              state: "unhealthy",
+              integration: { id: before.id, name: before.name, vendor: before.vendor },
+              failingSince: failure.failingSince,
+              error: failure.lastSyncError,
+              needsAction: after.needsAction,
+            },
+          );
+        }
+      })
+      .catch((secondary: unknown) => {
+        log.error({ err: secondary }, "could not record the sync failure");
+      });
+
+    if (becameUnhealthy) {
       log.warn(
         { kind, failures: failure.consecutiveFailures, failingSince: failure.failingSince },
         "integration is unhealthy",

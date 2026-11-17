@@ -25,7 +25,22 @@ export const TENANT_TABLES = [
   "backup_results",
   "incidents",
   "audit_logs",
+  "notification_channels",
+  "notification_batches",
+  "notification_deliveries",
 ] as const;
+
+/**
+ * Tables the runtime role may add to but not change, and ones it may not
+ * delete from. An attempt on these is refused for lack of privilege before
+ * row-level security is even consulted.
+ */
+export const NO_UPDATE_TABLES: readonly string[] = ["audit_logs", "notification_deliveries"];
+export const NO_DELETE_TABLES: readonly string[] = [
+  "audit_logs",
+  "notification_batches",
+  "notification_deliveries",
+];
 
 /**
  * Provisions a tenant and inserts one row into every tenant table, using the
@@ -99,6 +114,28 @@ export async function seedTenant(db: Db, label: string): Promise<SeededTenant> {
       },
     });
 
+    const channel = await tx.notificationChannel.create({
+      data: {
+        tenantId,
+        type: "webhook",
+        name: `${label} webhook`,
+        incidentTypes: ["failed", "missed", "stale"],
+        secretEnc: { v: 1, ciphertext: `not-a-real-secret-${label}` },
+      },
+    });
+    const batch = await tx.notificationBatch.create({
+      data: { tenantId, channelId: channel.id, kind: "test", payload: { kind: "test" } },
+    });
+    const delivery = await tx.notificationDelivery.create({
+      data: {
+        tenantId,
+        channelId: channel.id,
+        incidentId: incident.id,
+        event: "opened",
+        batchId: batch.id,
+      },
+    });
+
     return {
       users: user.id,
       integrations: integration.id,
@@ -108,6 +145,9 @@ export async function seedTenant(db: Db, label: string): Promise<SeededTenant> {
       backup_results: result.id,
       incidents: incident.id,
       audit_logs: audit.id,
+      notification_channels: channel.id,
+      notification_batches: batch.id,
+      notification_deliveries: delivery.id,
     } satisfies RowIds;
   });
 
@@ -139,6 +179,7 @@ export async function asTenant<T>(
 export const PG = {
   insufficientPrivilege: "42501",
   foreignKeyViolation: "23503",
+  uniqueViolation: "23505",
 } as const;
 
 export function pgCode(error: unknown): string | undefined {

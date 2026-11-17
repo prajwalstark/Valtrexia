@@ -1,6 +1,10 @@
 import { isMockAllowed } from "@valtrexia/connectors";
 import { brand } from "@valtrexia/core";
-import { createKeyProviderFromEnv, createLogger } from "@valtrexia/core/server";
+import {
+  createKeyProviderFromEnv,
+  createLogger,
+  outboundPolicyFromEnv,
+} from "@valtrexia/core/server";
 import { createDb } from "@valtrexia/db";
 import { parseConfig } from "./config";
 import { startWorker } from "./worker";
@@ -26,6 +30,8 @@ async function main(): Promise<void> {
     syncIntervalMinutes: config.syncIntervalMinutes,
     syncConcurrency: config.syncConcurrency,
     schedulerTickSeconds: config.schedulerTickSeconds,
+    notificationTickSeconds: config.notificationTickSeconds,
+    outboundPolicy: outboundPolicyFromEnv(process.env),
     dattoBaseUrl: config.dattoBaseUrl,
   });
   logger.info(`${brand.name} worker is running`);
