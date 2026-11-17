@@ -20,6 +20,7 @@ import {
 } from "@valtrexia/core";
 import { recordAudit, type Db } from "@valtrexia/db";
 import { z } from "zod";
+import { dayKey, lastDayKeys } from "./format";
 import type { ActionState } from "./integrations-core";
 import type { TenantSession } from "./session-core";
 
@@ -183,6 +184,8 @@ export interface FleetClient {
 }
 
 export interface FleetOverview {
+  /** The workspace's time zone, for showing dates. */
+  timeZone: string;
   /** Worst first. */
   clients: FleetClient[];
   /** How many clients are at each health level. */
@@ -221,7 +224,7 @@ export async function getFleetOverview(
     async ({ tx }) => ({
       tenant: await tx.tenant.findUniqueOrThrow({
         where: { id: session.tenantId },
-        select: { graceHours: true },
+        select: { graceHours: true, timeZone: true },
       }),
       integrations: await tx.integration.findMany({ select: integrationHealthSelect }),
       clients: await tx.client.findMany({
@@ -324,6 +327,7 @@ export async function getFleetOverview(
   const states = [...healthById.values()].map((h) => h.state);
   const synced = integrations.flatMap((i) => (i.lastSyncAt ? [i.lastSyncAt.getTime()] : []));
   return {
+    timeZone: tenant.timeZone,
     clients: rows,
     health,
     assets,
@@ -340,7 +344,7 @@ export async function getFleetOverview(
 }
 
 export interface AssetDay {
-  /** The UTC calendar day, as YYYY-MM-DD. */
+  /** The calendar day in the workspace's time zone, as YYYY-MM-DD. */
   date: string;
   /** The worst result of the day, or null if there were none. */
   worst: BackupStatus | null;
@@ -349,31 +353,27 @@ export interface AssetDay {
 }
 
 /**
- * One cell per UTC day for the last `days` days, oldest first, ending today.
- * A day's cell shows its worst result, so a single failure is never hidden
- * behind later successes. A day with no results stays empty, which is how a
- * missed backup looks.
+ * One cell per calendar day for the last `days` days, oldest first, ending
+ * today. Days are the workspace's own: a backup at 23:30 in New York belongs
+ * to that evening, not to the next day in UTC. A day's cell shows its worst
+ * result, so a single failure is never hidden behind later successes. A day
+ * with no results stays empty, which is how a missed backup looks.
  */
 export function buildDayStrip(
   results: Iterable<{ startedAt: Date; status: BackupStatus }>,
   now: Date,
+  timeZone: string,
   days: number = HISTORY_DAYS,
 ): AssetDay[] {
-  const today = Math.floor(now.getTime() / DAY_MS);
-  const buckets = new Map<number, BackupStatus[]>();
+  const keys = lastDayKeys(now, days, timeZone);
+  const buckets = new Map<string, BackupStatus[]>(keys.map((key) => [key, []]));
   for (const result of results) {
-    const day = Math.floor(result.startedAt.getTime() / DAY_MS);
-    if (day > today || day <= today - days) continue;
-    buckets.set(day, [...(buckets.get(day) ?? []), result.status]);
+    // Results before the period, or dated on a day after today, have no bucket.
+    buckets.get(dayKey(result.startedAt, timeZone))?.push(result.status);
   }
-  return Array.from({ length: days }, (_, index) => {
-    const day = today - (days - 1) + index;
-    const statuses = buckets.get(day) ?? [];
-    return {
-      date: new Date(day * DAY_MS).toISOString().slice(0, 10),
-      worst: worstStatus(statuses),
-      count: statuses.length,
-    };
+  return keys.map((key) => {
+    const statuses = buckets.get(key)!;
+    return { date: key, worst: worstStatus(statuses), count: statuses.length };
   });
 }
 
@@ -450,6 +450,8 @@ export interface ClientAsset {
 export interface ClientDetail {
   id: string;
   name: string;
+  /** The workspace's time zone, for showing dates and for where each day begins. */
+  timeZone: string;
   summary: ClientHealth;
   /** Watched assets worst first, then the ones that are not watched. */
   assets: ClientAsset[];
@@ -472,7 +474,9 @@ export async function getClientDetail(
   now: Date,
 ): Promise<ClientDetail | null> {
   if (!z.uuid().safeParse(clientId).success) return null;
-  const since = new Date((Math.floor(now.getTime() / DAY_MS) - (HISTORY_DAYS - 1)) * DAY_MS);
+  // A day more than the period: far enough back for any time zone and for a
+  // day lengthened by the clocks changing. Results are then kept by calendar day.
+  const since = new Date(now.getTime() - (HISTORY_DAYS + 1) * DAY_MS);
 
   const loaded = await deps.db.withTenant(session.tenantId, async ({ tx }) => {
     const client = await tx.client.findUnique({
@@ -530,12 +534,14 @@ export async function getClientDetail(
     });
     const tenant = await tx.tenant.findUniqueOrThrow({
       where: { id: session.tenantId },
-      select: { graceHours: true },
+      select: { graceHours: true, timeZone: true },
     });
-    return { client, results, incidents, graceHours: tenant.graceHours };
+    return { client, results, incidents, graceHours: tenant.graceHours, timeZone: tenant.timeZone };
   });
   if (!loaded) return null;
-  const { client, results, incidents } = loaded;
+  const { client, incidents, timeZone } = loaded;
+  const period = new Set(lastDayKeys(now, HISTORY_DAYS, timeZone));
+  const results = loaded.results.filter((result) => period.has(dayKey(result.startedAt, timeZone)));
   const clock: Clock = {
     now,
     graceHours: loaded.graceHours,
@@ -584,7 +590,7 @@ export async function getClientDetail(
             at: asset.mutedAt,
           }
         : null,
-      days: buildDayStrip(own, now),
+      days: buildDayStrip(own, now, timeZone),
       results: own.slice(0, RESULTS_PER_ASSET).map((r) => ({
         id: r.id,
         startedAt: r.startedAt,
@@ -607,6 +613,7 @@ export async function getClientDetail(
   return {
     id: client.id,
     name: client.name,
+    timeZone,
     summary: summarizeClientHealth(
       client.assets.map((asset) => ({ ...asset, currentStatus: views.get(asset.id)!.status })),
       {

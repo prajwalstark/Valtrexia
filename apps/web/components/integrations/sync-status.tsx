@@ -15,14 +15,16 @@ export function SyncStatus({
   state,
   now,
   syncIntervalMinutes,
+  timeZone,
   className,
 }: {
   state: SyncFacts;
   now: Date;
   syncIntervalMinutes: number;
+  timeZone: string;
   className?: string;
 }) {
-  const description = describeSync(state, now, syncIntervalMinutes);
+  const description = describeSync(state, now, syncIntervalMinutes, timeZone);
   const look = description.syncing
     ? { icon: RefreshCw, tone: "text-status-running" }
     : LOOK[description.state];

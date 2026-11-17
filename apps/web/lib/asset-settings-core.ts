@@ -214,7 +214,13 @@ export async function muteAssets(
       })),
     );
 
-    const until = indefinite ? "until someone unmutes it" : `until ${formatDate(mutedUntil)}`;
+    const { timeZone } = await context.tx.tenant.findUniqueOrThrow({
+      where: { id: session.tenantId },
+      select: { timeZone: true },
+    });
+    const until = indefinite
+      ? "until someone unmutes it"
+      : `until ${formatDate(mutedUntil, timeZone)}`;
     const closed =
       open.length > 0
         ? ` ${count(open.length, "open incident")} ${open.length === 1 ? "was" : "were"} closed.`

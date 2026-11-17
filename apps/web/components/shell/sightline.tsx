@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
  * data is. It is the product's tagline made literal.
  */
 export function Sightline({ overview, now }: { overview: FleetOverview; now: Date }) {
-  const { assets, integrations } = overview;
+  const { assets, integrations, timeZone } = overview;
   // Unknown is listed too: an asset whose backup cannot be confirmed must
   // never be folded into "all backed up".
   const attention = (["failed", "missed", "warning", "unknown"] as const).filter(
@@ -87,11 +87,11 @@ export function Sightline({ overview, now }: { overview: FleetOverview; now: Dat
       >
         <CircleAlert aria-hidden="true" className="size-4 text-status-critical" />
         {integrations.lastSyncAt
-          ? `Syncs have stopped. Last data ${timeAgo(integrations.lastSyncAt, now)}`
+          ? `Syncs have stopped. Last data ${timeAgo(integrations.lastSyncAt, now, timeZone)}`
           : "Syncs are not running"}
       </Link>
     ) : integrations.lastSyncAt ? (
-      <span>Last synced {timeAgo(integrations.lastSyncAt, now)}</span>
+      <span>Last synced {timeAgo(integrations.lastSyncAt, now, timeZone)}</span>
     ) : (
       <span>Backups are checked every {SYNC_INTERVAL_MINUTES} minutes</span>
     );

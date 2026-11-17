@@ -13,5 +13,5 @@ export const getFleet = cache(async () => {
   const session = await requireTenant();
   const now = new Date();
   const deps = { db: await getSafeDb(), syncIntervalMinutes: syncIntervalMinutes() };
-  return { now, overview: await getFleetOverview(deps, session, now) };
+  return { now, session, overview: await getFleetOverview(deps, session, now) };
 });

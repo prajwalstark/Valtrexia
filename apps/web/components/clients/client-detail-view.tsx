@@ -36,6 +36,7 @@ export function ClientDetailView({
   /** Renders the settings that apply to every asset of the client. */
   clientSettingsSlot: ReactNode;
 }) {
+  const { timeZone } = client;
   const watched = client.assets.filter((asset) => asset.watched);
   const unwatched = client.assets.filter((asset) => !asset.watched);
 
@@ -79,14 +80,14 @@ export function ClientDetailView({
                       <span className="font-medium">{INCIDENT_LABEL[incident.type]}</span> on{" "}
                       {incident.assetName}
                       <span className="text-subtle-foreground">
-                        , open since {timeAgo(incident.openedAt, now)}
+                        , open since {timeAgo(incident.openedAt, now, timeZone)}
                       </span>
                     </span>
                   </p>
                   {incident.acknowledgedAt ? (
                     <p className="text-sm text-muted-foreground">
                       Acknowledged by {incident.acknowledgedBy ?? "a team member"}{" "}
-                      {timeAgo(incident.acknowledgedAt, now)}
+                      {timeAgo(incident.acknowledgedAt, now, timeZone)}
                     </p>
                   ) : (
                     acknowledgeSlot(incident)
@@ -109,7 +110,8 @@ export function ClientDetailView({
               Assets
             </h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Worst first. Each square is one day of the last {HISTORY_DAYS}, in UTC, showing that
+              Worst first. Each square is one day of the last {HISTORY_DAYS}, in{" "}
+              {timeZone === "UTC" ? "UTC" : `${timeZone.replaceAll("_", " ")} time`}, showing that
               day’s worst result. Open an asset for its individual backups.
             </p>
           </div>
@@ -142,6 +144,7 @@ export function ClientDetailView({
                   key={asset.id}
                   asset={asset}
                   now={now}
+                  timeZone={timeZone}
                   settings={assetSettingsSlot(asset)}
                 />
               ))}
@@ -153,23 +156,26 @@ export function ClientDetailView({
   );
 }
 
-function notWatchedReason(asset: ClientAsset): string | null {
+function notWatchedReason(asset: ClientAsset, timeZone: string): string | null {
   if (asset.isArchived) return "Archived";
   if (asset.isPaused) return "Paused";
-  if (asset.mute) return asset.mute.until ? `Muted until ${formatDate(asset.mute.until)}` : "Muted";
+  if (asset.mute)
+    return asset.mute.until ? `Muted until ${formatDate(asset.mute.until, timeZone)}` : "Muted";
   return null;
 }
 
 function AssetRow({
   asset,
   now,
+  timeZone,
   settings,
 }: {
   asset: ClientAsset;
   now: Date;
+  timeZone: string;
   settings: ReactNode;
 }) {
-  const reason = notWatchedReason(asset);
+  const reason = notWatchedReason(asset, timeZone);
   const meta = [asset.type, asset.deviceName, asset.integrationName].filter(Boolean).join(", ");
 
   return (
@@ -199,7 +205,7 @@ function AssetRow({
 
           <p className="col-start-1 row-start-3 text-sm text-muted-foreground lg:col-start-3 lg:row-start-1">
             {asset.lastSuccessAt
-              ? `Last backup ${timeAgo(asset.lastSuccessAt, now)}`
+              ? `Last backup ${timeAgo(asset.lastSuccessAt, now, timeZone)}`
               : "Never backed up"}
             {asset.staleSince ? (
               <span className="flex items-start gap-1 text-foreground">
@@ -212,7 +218,7 @@ function AssetRow({
             ) : null}
             {asset.unconfirmedSince ? (
               <span className="block text-subtle-foreground">
-                No vendor data since {formatDateTime(asset.unconfirmedSince)}
+                No vendor data since {formatDateTime(asset.unconfirmedSince, timeZone)}
               </span>
             ) : null}
             {asset.currentStatus === "missed" && asset.lastResultStatus ? (
@@ -268,7 +274,7 @@ function AssetRow({
                     {asset.results.map((result) => (
                       <tr key={result.id}>
                         <td className="py-1.5 pr-4 whitespace-nowrap tabular-nums">
-                          {formatDateTime(result.startedAt)}
+                          {formatDateTime(result.startedAt, timeZone)}
                         </td>
                         <td className="py-1.5 pr-4">
                           <StatusBadge status={result.status} />

@@ -64,7 +64,7 @@ function describeDay(day: AssetDay): string {
 }
 
 /**
- * An asset's last 14 days, one cell per UTC day, oldest on the left. Each
+ * An asset's last 14 days, one cell per day in the workspace's time zone, oldest on the left. Each
  * cell shows the day's worst result; an empty cell is a day with no backup.
  *
  * Hovering a cell names the day and what happened. That is a convenience:

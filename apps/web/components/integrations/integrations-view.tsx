@@ -17,6 +17,7 @@ export function IntegrationsView({
   canManage,
   now,
   syncIntervalMinutes,
+  timeZone,
   disconnected = false,
 }: {
   integrations: IntegrationSummary[];
@@ -24,6 +25,7 @@ export function IntegrationsView({
   canManage: boolean;
   now: Date;
   syncIntervalMinutes: number;
+  timeZone: string;
   disconnected?: boolean;
 }) {
   return (
@@ -75,6 +77,7 @@ export function IntegrationsView({
                       state={integration}
                       now={now}
                       syncIntervalMinutes={syncIntervalMinutes}
+                      timeZone={timeZone}
                       className="mt-2"
                     />
                   </div>

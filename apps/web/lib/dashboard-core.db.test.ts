@@ -169,8 +169,8 @@ async function tenant(
 describe("buildDayStrip", () => {
   const result = (iso: string, status: BackupStatus) => ({ startedAt: new Date(iso), status });
 
-  it("gives one cell per UTC day, oldest first, ending today", () => {
-    const strip = buildDayStrip([], NOW);
+  it("gives one cell per day, oldest first, ending today", () => {
+    const strip = buildDayStrip([], NOW, "UTC");
     expect(strip).toHaveLength(HISTORY_DAYS);
     expect(strip[0]!.date).toBe("2026-10-30");
     expect(strip.at(-1)!.date).toBe("2026-11-12");
@@ -188,6 +188,7 @@ describe("buildDayStrip", () => {
         result("2026-11-10T02:00:00Z", "running"),
       ],
       NOW,
+      "UTC",
     );
     expect(strip.at(-1)).toEqual({ date: "2026-11-12", worst: "failed", count: 3 });
     expect(strip.at(-2)).toEqual({ date: "2026-11-11", worst: "warning", count: 2 });
@@ -199,6 +200,7 @@ describe("buildDayStrip", () => {
     const strip = buildDayStrip(
       [result("2026-11-11T23:59:59.999Z", "failed"), result("2026-11-12T00:00:00.000Z", "success")],
       NOW,
+      "UTC",
     );
     expect(strip.at(-2)).toMatchObject({ date: "2026-11-11", worst: "failed", count: 1 });
     expect(strip.at(-1)).toMatchObject({ date: "2026-11-12", worst: "success", count: 1 });
@@ -212,13 +214,14 @@ describe("buildDayStrip", () => {
         result("2026-11-13T00:00:01Z", "failed"), // tomorrow
       ],
       NOW,
+      "UTC",
     );
     expect(strip[0]).toEqual({ date: "2026-10-30", worst: "warning", count: 1 });
     expect(strip.reduce((sum, day) => sum + day.count, 0)).toBe(1);
   });
 
   it("supports other lengths", () => {
-    expect(buildDayStrip([], NOW, 7).map((d) => d.date)).toEqual([
+    expect(buildDayStrip([], NOW, "UTC", 7).map((d) => d.date)).toEqual([
       "2026-11-06",
       "2026-11-07",
       "2026-11-08",
@@ -226,6 +229,48 @@ describe("buildDayStrip", () => {
       "2026-11-10",
       "2026-11-11",
       "2026-11-12",
+    ]);
+  });
+
+  it("uses the workspace's days, not UTC's", () => {
+    // 01:30 UTC on the 12th is 20:30 on the 11th in New York; NOW (15:00 UTC) is 10:00 there.
+    const late = result("2026-11-12T01:30:00Z", "failed");
+    const utc = buildDayStrip([late], NOW, "UTC");
+    expect(utc.at(-1)).toMatchObject({ date: "2026-11-12", worst: "failed" });
+    expect(utc.at(-2)).toMatchObject({ date: "2026-11-11", worst: null });
+
+    const newYork = buildDayStrip([late], NOW, "America/New_York");
+    expect(newYork.at(-1)).toMatchObject({ date: "2026-11-12", worst: null });
+    expect(newYork.at(-2)).toMatchObject({ date: "2026-11-11", worst: "failed" });
+  });
+
+  it("ends on the workspace's today, which can be a different date from UTC's", () => {
+    const earlyUtc = new Date("2026-11-12T02:00:00Z");
+    expect(buildDayStrip([], earlyUtc, "UTC").at(-1)!.date).toBe("2026-11-12");
+    expect(buildDayStrip([], earlyUtc, "America/New_York").at(-1)!.date).toBe("2026-11-11");
+    expect(buildDayStrip([], earlyUtc, "Australia/Sydney").at(-1)!.date).toBe("2026-11-12");
+    expect(
+      buildDayStrip([], new Date("2026-11-12T14:00:00Z"), "Australia/Sydney").at(-1)!.date,
+    ).toBe("2026-11-13");
+  });
+
+  it("puts a nightly backup on the right day through a clock change", () => {
+    // A backup at 01:30 local every night across New York's change on 1 November 2026:
+    // 05:30 UTC before it, 06:30 UTC after. Every local day gets exactly one.
+    const nightly = [
+      result("2026-10-30T05:30:00Z", "success"),
+      result("2026-10-31T05:30:00Z", "success"),
+      result("2026-11-01T05:30:00Z", "success"),
+      result("2026-11-02T06:30:00Z", "success"),
+      result("2026-11-03T06:30:00Z", "success"),
+    ];
+    const strip = buildDayStrip(nightly, new Date("2026-11-03T18:00:00Z"), "America/New_York", 5);
+    expect(strip.map((day) => [day.date, day.count])).toEqual([
+      ["2026-10-30", 1],
+      ["2026-10-31", 1],
+      ["2026-11-01", 1],
+      ["2026-11-02", 1],
+      ["2026-11-03", 1],
     ]);
   });
 });
@@ -554,6 +599,7 @@ describe("getFleetOverview", () => {
       role: "owner",
     };
     expect(await getFleetOverview({ db }, session, NOW)).toEqual({
+      timeZone: "UTC",
       clients: [],
       health: { red: 0, amber: 0, green: 0, none: 0 },
       assets: {

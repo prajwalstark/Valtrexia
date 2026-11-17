@@ -12,10 +12,12 @@ import { cn } from "@/lib/utils";
 export function IntegrationProblems({
   integrations,
   now,
+  timeZone,
   className,
 }: {
   integrations: FleetOverview["integrations"];
   now: Date;
+  timeZone: string;
   className?: string;
 }) {
   const { problems, total, stalled } = integrations;
@@ -43,7 +45,7 @@ export function IntegrationProblems({
       ) : null}
       <ul className="space-y-2">
         {problems.map((problem) => {
-          const { text, action } = describeIntegrationProblem(problem, now);
+          const { text, action } = describeIntegrationProblem(problem, now, timeZone);
           const Icon = problem.state === "retrying" ? TriangleAlert : CircleAlert;
           return (
             <li key={problem.id} className="flex items-start gap-2.5">

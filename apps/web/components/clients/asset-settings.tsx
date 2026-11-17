@@ -219,10 +219,12 @@ function ExpectationsForm({
   );
 }
 
-function describeMute(mute: AssetMute): string {
-  const until = mute.until ? `until ${formatDate(mute.until)}` : "until someone unmutes it";
+function describeMute(mute: AssetMute, timeZone: string): string {
+  const until = mute.until
+    ? `until ${formatDate(mute.until, timeZone)}`
+    : "until someone unmutes it";
   const who = mute.by ? ` by ${mute.by}` : "";
-  const when = mute.at ? ` on ${formatDate(mute.at)}` : "";
+  const when = mute.at ? ` on ${formatDate(mute.at, timeZone)}` : "";
   return `Muted ${until}${who}${when}.`;
 }
 
@@ -232,6 +234,7 @@ function describeMute(mute: AssetMute): string {
  */
 export function AssetSettings({
   canManage,
+  timeZone,
   expectedFrequencyHours,
   configuredSlaHours,
   appliedSlaHours,
@@ -242,6 +245,8 @@ export function AssetSettings({
 }: {
   /** Owners can change expectations and mute without limit. */
   canManage: boolean;
+  /** The workspace's time zone, for the dates of a mute. */
+  timeZone: string;
   expectedFrequencyHours: number;
   configuredSlaHours: number;
   /** Never shorter than the backup window, so it can differ from the configured one. */
@@ -258,7 +263,7 @@ export function AssetSettings({
         {mute ? (
           <>
             <p className="mt-2 text-sm text-muted-foreground">
-              {describeMute(mute)}
+              {describeMute(mute, timeZone)}
               {mute.reason ? <span className="block text-foreground">“{mute.reason}”</span> : null}
             </p>
             <div className="mt-3">

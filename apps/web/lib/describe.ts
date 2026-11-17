@@ -86,9 +86,10 @@ export function describeSync(
   facts: SyncFacts,
   now: Date,
   syncIntervalMinutes: number,
+  timeZone: string,
 ): SyncDescription {
   const health = assessIntegrationHealth({ now, syncIntervalMinutes, ...facts });
-  const last = facts.lastSyncAt ? `Last synced ${timeAgo(facts.lastSyncAt, now)}.` : null;
+  const last = facts.lastSyncAt ? `Last synced ${timeAgo(facts.lastSyncAt, now, timeZone)}.` : null;
   const reason = facts.lastSyncError ?? "The last sync did not complete.";
   const join = (...parts: (string | null)[]) => parts.filter(Boolean).join(" ");
 
@@ -110,7 +111,7 @@ export function describeSync(
         text: join("The last sync failed and will be retried.", reason, last),
       };
     case "unhealthy": {
-      const since = health.since ? ` since ${formatDateTime(health.since)}` : "";
+      const since = health.since ? ` since ${formatDateTime(health.since, timeZone)}` : "";
       const attempts =
         facts.consecutiveFailures > 1 ? ` (${facts.consecutiveFailures} attempts)` : "";
       return {
@@ -129,8 +130,8 @@ export function describeSync(
         state: "stalled",
         syncing: false,
         text: facts.lastSyncAt
-          ? `No sync has finished since ${formatDateTime(facts.lastSyncAt)}. Syncs should run every ${count(syncIntervalMinutes, "minute")}; the background worker may not be running.`
-          : `Connected ${timeAgo(facts.createdAt, now)} and not synced yet. The background worker may not be running.`,
+          ? `No sync has finished since ${formatDateTime(facts.lastSyncAt, timeZone)}. Syncs should run every ${count(syncIntervalMinutes, "minute")}; the background worker may not be running.`
+          : `Connected ${timeAgo(facts.createdAt, now, timeZone)} and not synced yet. The background worker may not be running.`,
       };
   }
 }
@@ -142,6 +143,7 @@ export function describeSync(
 export function describeIntegrationProblem(
   problem: IntegrationProblem,
   now: Date,
+  timeZone: string,
 ): { text: string; action: string } {
   const unconfirmed =
     problem.unconfirmedAssets > 0
@@ -152,7 +154,7 @@ export function describeIntegrationProblem(
     return {
       text:
         (problem.lastSyncAt
-          ? `${problem.name} has not synced since ${formatDateTime(problem.lastSyncAt)}.`
+          ? `${problem.name} has not synced since ${formatDateTime(problem.lastSyncAt, timeZone)}.`
           : `${problem.name} has not synced yet.`) + unconfirmed,
       action: "View integration",
     };

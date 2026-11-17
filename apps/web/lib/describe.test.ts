@@ -71,7 +71,8 @@ describe("describeSync", () => {
     createdAt: minutesAgo(60 * 24 * 30),
     ...overrides,
   });
-  const say = (overrides: Partial<SyncFacts> = {}) => describeSync(facts(overrides), NOW, 15);
+  const say = (overrides: Partial<SyncFacts> = {}) =>
+    describeSync(facts(overrides), NOW, 15, "UTC");
 
   it("reports a healthy integration by when it last synced", () => {
     expect(say()).toEqual({ state: "healthy", syncing: false, text: "Last synced 5 minutes ago" });
@@ -158,7 +159,7 @@ describe("describeIntegrationProblem", () => {
   });
 
   it("says how long it has been failing, why, and how many assets that leaves unconfirmed", () => {
-    expect(describeIntegrationProblem(problem({ unconfirmedAssets: 12 }), NOW)).toEqual({
+    expect(describeIntegrationProblem(problem({ unconfirmedAssets: 12 }), NOW, "UTC")).toEqual({
       text: "Datto main has been failing to sync for 3 hours. The vendor API could not be reached. 12 assets can no longer be confirmed.",
       action: "View integration",
     });
@@ -169,22 +170,22 @@ describe("describeIntegrationProblem", () => {
       needsAction: true,
       error: "The vendor rejected these credentials.",
     });
-    expect(describeIntegrationProblem(rejected, NOW).action).toBe("Replace the keys");
+    expect(describeIntegrationProblem(rejected, NOW, "UTC").action).toBe("Replace the keys");
   });
 
   it("is brief about a failure that is still being retried", () => {
-    expect(describeIntegrationProblem(problem({ state: "retrying" }), NOW).text).toBe(
+    expect(describeIntegrationProblem(problem({ state: "retrying" }), NOW, "UTC").text).toBe(
       "Datto main: the last sync failed and will be retried.",
     );
   });
 
   it("says since when a stalled integration has had no data", () => {
     const stalled = problem({ state: "stalled", error: null, unconfirmedAssets: 1 });
-    expect(describeIntegrationProblem(stalled, NOW).text).toBe(
+    expect(describeIntegrationProblem(stalled, NOW, "UTC").text).toBe(
       "Datto main has not synced since 12 Nov, 08:45 UTC. 1 asset can no longer be confirmed.",
     );
     expect(
-      describeIntegrationProblem(problem({ state: "stalled", lastSyncAt: null }), NOW).text,
+      describeIntegrationProblem(problem({ state: "stalled", lastSyncAt: null }), NOW, "UTC").text,
     ).toBe("Datto main has not synced yet.");
   });
 });
@@ -200,9 +201,9 @@ describe("formatting", () => {
   });
 
   it("formats a date and time in UTC on a 24-hour clock", () => {
-    expect(formatDateTime(new Date("2026-11-12T13:05:00Z"))).toBe("12 Nov, 13:05 UTC");
-    expect(formatDateTime(new Date("2026-01-01T00:00:00Z"))).toBe("1 Jan, 00:00 UTC");
-    expect(formatDateTime(new Date("2026-11-12T23:59:00-05:00"))).toBe("13 Nov, 04:59 UTC");
+    expect(formatDateTime(new Date("2026-11-12T13:05:00Z"), "UTC")).toBe("12 Nov, 13:05 UTC");
+    expect(formatDateTime(new Date("2026-01-01T00:00:00Z"), "UTC")).toBe("1 Jan, 00:00 UTC");
+    expect(formatDateTime(new Date("2026-11-12T23:59:00-05:00"), "UTC")).toBe("13 Nov, 04:59 UTC");
   });
 
   it("formats a day key", () => {

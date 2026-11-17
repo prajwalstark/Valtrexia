@@ -26,6 +26,10 @@ export const MUTE_REASON_MAX_LENGTH = 500;
 /** Mute lengths the forms offer, in days. */
 export const MUTE_DAY_CHOICES = [1, 3, 7, 14, 30, 90] as const;
 
+/** Bounds for a workspace's grace period, in hours. None to a week; the database enforces the same. */
+export const MIN_GRACE_HOURS = 0;
+export const MAX_GRACE_HOURS = 168;
+
 /** Bounds for an asset's expected backup frequency and its SLA, in hours. One hour to one year. */
 export const MIN_ASSET_HOURS = 1;
 export const MAX_ASSET_HOURS = 8760;

@@ -39,6 +39,7 @@ export default async function ClientPage({ params }: { params: Promise<{ clientI
       assetSettingsSlot={(asset) => (
         <AssetSettings
           canManage={canManage}
+          timeZone={client.timeZone}
           expectedFrequencyHours={asset.expectedFrequencyHours}
           configuredSlaHours={asset.configuredSlaHours}
           appliedSlaHours={asset.slaHours}

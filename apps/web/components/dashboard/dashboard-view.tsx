@@ -28,7 +28,12 @@ export function DashboardView({
         description="Every client, ranked by backup health with the worst first."
       />
 
-      <IntegrationProblems integrations={integrations} now={now} className="mt-8 max-w-3xl" />
+      <IntegrationProblems
+        integrations={integrations}
+        now={now}
+        timeZone={overview.timeZone}
+        className="mt-8 max-w-3xl"
+      />
 
       {clients.length === 0 ? (
         <section className="mt-10 max-w-xl border-l-2 border-iris-dim pl-6">

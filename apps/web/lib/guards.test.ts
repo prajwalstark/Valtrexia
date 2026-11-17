@@ -77,7 +77,10 @@ describe("tenant guard", () => {
 
   it("client components never import server-only modules", () => {
     const serverOnly =
-      /from "(@\/lib\/(auth|db|keys|server-deps|fleet|request)|@valtrexia\/core\/server)"/;
+      // The *-core modules hold the logic behind the pages and reach the
+      // database. A client component may take their types, never their code:
+      // a value import would bundle the database client into the browser.
+      /from "(@\/lib\/(auth|db|keys|server-deps|fleet|request|workspace|[\w-]+-core)|@valtrexia\/(db|connectors|core\/server))"/;
     const offenders: string[] = [];
     for (const dir of ["app", "components"]) {
       for (const file of walk(join(webRoot, dir))) {

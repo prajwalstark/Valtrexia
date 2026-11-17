@@ -14,6 +14,7 @@ import { requireTenant } from "@/lib/auth";
 import { getSafeDb } from "@/lib/db";
 import { getIntegrationFor } from "@/lib/integrations-core";
 import { syncIntervalMinutes } from "@/lib/sync-config";
+import { getWorkspace } from "@/lib/workspace";
 
 export const metadata: Metadata = { title: "Integration" };
 
@@ -31,6 +32,7 @@ export default async function IntegrationPage({
   if (!integration) notFound();
 
   const { connected } = await searchParams;
+  const { timeZone } = await getWorkspace();
   const isDatto = integration.vendor === "datto_bcdr";
 
   return (
@@ -39,6 +41,7 @@ export default async function IntegrationPage({
       canManage={session.role === "owner"}
       now={new Date()}
       syncIntervalMinutes={syncIntervalMinutes()}
+      timeZone={timeZone}
       justConnected={connected === "1"}
       testSlot={<TestConnection action={testSavedAction.bind(null, integration.id)} />}
       replaceSlot={

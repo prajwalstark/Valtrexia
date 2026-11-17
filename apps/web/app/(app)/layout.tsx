@@ -15,7 +15,8 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   // place, workspace selected; it redirects otherwise. Pages and server
   // actions make that check again themselves, because a layout alone does
   // not protect them.
-  const { overview, now } = await getFleet();
+  const { overview, now, session } = await getFleet();
+  const isOwner = session.role === "owner";
 
   return (
     <div className="min-h-dvh md:grid md:grid-cols-[14.5rem_minmax(0,1fr)]">
@@ -31,7 +32,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
           <Wordmark />
         </Link>
         <div className="mt-8">
-          <AppNav orientation="vertical" />
+          <AppNav orientation="vertical" isOwner={isOwner} />
         </div>
         <div className="mt-auto flex items-center justify-between gap-2 px-3 pt-6">
           <OrganizationSwitcher hidePersonal afterCreateOrganizationUrl="/dashboard" />
@@ -48,7 +49,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
             <UserButton />
           </div>
           <div className="-mx-1 mt-3 overflow-x-auto">
-            <AppNav orientation="horizontal" />
+            <AppNav orientation="horizontal" isOwner={isOwner} />
           </div>
         </div>
 

@@ -97,6 +97,8 @@ model Tenant {
   name       String
   /// Hours added to an asset's expected frequency before it counts as missed.
   graceHours Int      @default(2) @map("grace_hours")
+  /// IANA time zone the workspace reads dates and days in. Everything is stored in UTC.
+  timeZone   String   @default("UTC") @map("time_zone")
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt  DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
