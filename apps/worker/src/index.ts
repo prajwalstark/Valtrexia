@@ -1,6 +1,7 @@
 import { isMockAllowed } from "@valtrexia/connectors";
 import { brand } from "@valtrexia/core";
 import {
+  createEmailSenderFromEnv,
   createKeyProviderFromEnv,
   createLogger,
   outboundPolicyFromEnv,
@@ -32,6 +33,7 @@ async function main(): Promise<void> {
     schedulerTickSeconds: config.schedulerTickSeconds,
     notificationTickSeconds: config.notificationTickSeconds,
     outboundPolicy: outboundPolicyFromEnv(process.env),
+    emailSender: createEmailSenderFromEnv(process.env, logger),
     dattoBaseUrl: config.dattoBaseUrl,
   });
   logger.info(`${brand.name} worker is running`);

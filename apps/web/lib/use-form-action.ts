@@ -10,6 +10,11 @@ import { useState, useTransition, type FormEvent } from "react";
  * A refused save would lose what was typed, and a drop-down would fall back
  * to the entry it showed when the page loaded while the server held another.
  * Submitting by hand leaves the fields exactly as the person left them.
+ *
+ * The action is always given the initial state as its "previous" state,
+ * never the last result. No action here uses the previous state, and a last
+ * result can hold something that must not travel back to the server: a
+ * webhook's signing secret is shown in one, once.
  */
 export function useFormAction<State>(
   action: (previous: State, formData: FormData) => Promise<State>,
@@ -22,7 +27,7 @@ export function useFormAction<State>(
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
     startTransition(async () => {
-      setState(await action(state, formData));
+      setState(await action(initial, formData));
     });
   };
   return [state, onSubmit, pending];

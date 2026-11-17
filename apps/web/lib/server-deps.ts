@@ -1,6 +1,6 @@
 import "server-only";
 import { isMockAllowed } from "@valtrexia/connectors";
-import { createLogger } from "@valtrexia/core/server";
+import { createLogger, outboundPolicyFromEnv } from "@valtrexia/core/server";
 import { getSafeDb } from "./db";
 import type { IntegrationDeps } from "./integrations-core";
 import { getKeyProvider } from "./keys";
@@ -31,4 +31,22 @@ export async function integrationDeps(): Promise<IntegrationDeps> {
     logger,
     ip: await clientIp(),
   };
+}
+
+/** What the notification settings need, assembled from configuration for one request. */
+export async function notificationDeps() {
+  return {
+    db: await getSafeDb(),
+    keyProvider: getKeyProvider(),
+    // Server configuration only. Never relaxed in production, whatever is set.
+    outboundPolicy: outboundPolicyFromEnv(process.env),
+    // The web app and the worker must be given the same EMAIL_PROVIDER.
+    emailAvailable: emailConfigured(process.env),
+    ip: await clientIp(),
+  };
+}
+
+/** Whether this server can send email. The worker decides how; here it only matters whether. */
+export function emailConfigured(env: Record<string, string | undefined>): boolean {
+  return (env.EMAIL_PROVIDER?.trim() ?? "") !== "";
 }

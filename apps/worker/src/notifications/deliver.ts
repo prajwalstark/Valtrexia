@@ -1,15 +1,17 @@
 import {
   DecryptionError,
+  EmailSendError,
   OutboundFailedError,
   OutboundRefusedError,
   postJson,
   signWebhook,
+  type EmailSender,
   type KeyProvider,
   type Logger,
   type OutboundPolicy,
   type Resolver,
 } from "@valtrexia/core/server";
-import { brand } from "@valtrexia/core";
+import { brand, renderNotificationEmail, type NotificationPayload } from "@valtrexia/core";
 import {
   claimNotificationBatch,
   decryptChannelDestination,
@@ -47,6 +49,8 @@ export interface DeliveryDeps {
   logger: Logger;
   /** What tenant-supplied destinations may be. Strict unless set for local development. */
   outboundPolicy: OutboundPolicy;
+  /** How email is sent, or null when this server has no email set up. */
+  emailSender: EmailSender | null;
   now?: () => Date;
   /** Replaces DNS. For tests. */
   resolver?: Resolver;
@@ -75,6 +79,9 @@ export function outcomeOfStatus(status: number): BatchOutcome {
 export function outcomeOfError(error: unknown): BatchOutcome {
   if (error instanceof OutboundRefusedError) return { status: "failed", error: error.message };
   if (error instanceof OutboundFailedError) return { status: "retry", error: error.message };
+  if (error instanceof EmailSendError) {
+    return { status: error.retryable ? "retry" : "failed", error: error.message };
+  }
   if (error instanceof DecryptionError) {
     return {
       status: "failed",
@@ -91,12 +98,7 @@ async function send(deps: DeliveryDeps, tenantId: string, batch: ClaimedBatch, n
       error: "The channel was turned off before this was sent.",
     } satisfies BatchOutcome;
   }
-  if (batch.channel.type !== "webhook") {
-    return {
-      status: "failed",
-      error: "This kind of channel cannot send yet.",
-    } satisfies BatchOutcome;
-  }
+  if (batch.channel.type === "email") return sendEmail(deps, batch);
   try {
     const destination = (
       await decryptChannelDestination({ tenantId }, deps.keyProvider, batch.channel)
@@ -111,6 +113,29 @@ async function send(deps: DeliveryDeps, tenantId: string, batch: ClaimedBatch, n
       ...(deps.timeoutMs ? { timeoutMs: deps.timeoutMs } : {}),
     });
     return outcomeOfStatus(status);
+  } catch (error) {
+    return outcomeOfError(error);
+  }
+}
+
+function recipientsOf(config: unknown): string[] {
+  const value = (config as { recipients?: unknown } | null)?.recipients;
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+}
+
+async function sendEmail(deps: DeliveryDeps, batch: ClaimedBatch): Promise<BatchOutcome> {
+  if (!deps.emailSender) {
+    return { status: "failed", error: "Email is not set up on this server." };
+  }
+  const to = recipientsOf(batch.channel.config);
+  if (to.length === 0) return { status: "failed", error: "The channel has no recipients." };
+  try {
+    const email = renderNotificationEmail(batch.payload as NotificationPayload, {
+      timeZone: batch.timeZone,
+      channelName: batch.channel.name,
+    });
+    await deps.emailSender.send({ to, ...email, idempotencyKey: batch.id });
+    return { status: "sent" };
   } catch (error) {
     return outcomeOfError(error);
   }

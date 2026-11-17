@@ -36,3 +36,12 @@ export {
   verifyWebhook,
   type WebhookMessage,
 } from "./notifications/webhook-signature";
+export {
+  createEmailSenderFromEnv,
+  EmailSendError,
+  LogEmailSender,
+  MAX_EMAIL_RECIPIENTS,
+  MemoryEmailSender,
+  type EmailMessage,
+  type EmailSender,
+} from "./notifications/email-sender";

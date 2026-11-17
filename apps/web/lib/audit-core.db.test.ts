@@ -369,6 +369,19 @@ describe("describeAuditEntry", () => {
       }),
     ).toBe("Added the webhook channel Ops, sending to hooks.example.com");
     expect(
+      say("notification_channel.created", randomUUID(), {
+        type: "email",
+        name: "On-call",
+        recipients: 3,
+      }),
+    ).toBe("Added the email channel On-call, sending to 3 addresses");
+    expect(
+      say("notification_channel.disabled", randomUUID(), { type: "email", name: "On-call" }),
+    ).toBe("Turned off the email channel On-call");
+    expect(
+      say("notification_channel.enabled", randomUUID(), { type: "email", name: "On-call" }),
+    ).toBe("Turned on the email channel On-call");
+    expect(
       say("notification_channel.deleted", randomUUID(), { type: "webhook", name: "Ops" }),
     ).toBe("Deleted the webhook channel Ops");
   });

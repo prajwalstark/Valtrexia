@@ -1,4 +1,10 @@
-import type { KeyProvider, Logger, OutboundPolicy, Resolver } from "@valtrexia/core/server";
+import type {
+  EmailSender,
+  KeyProvider,
+  Logger,
+  OutboundPolicy,
+  Resolver,
+} from "@valtrexia/core/server";
 import type { Db } from "@valtrexia/db";
 import { Queue, Worker } from "bullmq";
 import {
@@ -34,6 +40,8 @@ export interface WorkerOptions {
   notificationTickSeconds?: number;
   /** What tenant-supplied destinations may be. Strict unless set for local development. */
   outboundPolicy?: OutboundPolicy;
+  /** How email is sent, or null when this server has no email set up. */
+  emailSender?: EmailSender | null;
   dattoBaseUrl?: string | undefined;
   /** Redis key prefix. Tests use their own so they never see each other's jobs. */
   prefix?: string;
@@ -79,6 +87,7 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
     keyProvider: options.keyProvider,
     logger,
     outboundPolicy: options.outboundPolicy ?? {},
+    emailSender: options.emailSender ?? null,
     ...(options.now ? { now: options.now } : {}),
     ...(options.resolver ? { resolver: options.resolver } : {}),
   };

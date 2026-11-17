@@ -3,10 +3,14 @@ import { LocalKeyProvider, type Resolver } from "@valtrexia/core/server";
 import { createDb, decryptChannelDestination, type Db } from "@valtrexia/db";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import {
+  createEmailChannelFor,
   createWebhookChannelFor,
   deleteChannelFor,
+  getNotificationsPage,
   listChannelsFor,
+  parseRecipients,
   sendTestNotificationFor,
+  setChannelEnabledFor,
   type NotificationDeps,
 } from "./notifications-core";
 import type { TenantSession } from "./session-core";
@@ -249,5 +253,148 @@ describe("deleteChannelFor and sendTestNotificationFor", () => {
     });
     expect(await listChannelsFor({ db }, mine.owner)).toEqual([]);
     expect(await listChannelsFor({ db }, theirs.owner)).toHaveLength(1);
+  });
+});
+
+describe("parseRecipients", () => {
+  it("reads addresses separated however people type them, dropping repeats", () => {
+    expect(
+      parseRecipients("alex@msp.example, sam@msp.example;\nKim@msp.example  ALEX@msp.example"),
+    ).toEqual({
+      ok: true,
+      recipients: ["alex@msp.example", "sam@msp.example", "Kim@msp.example"],
+    });
+  });
+
+  it.each([
+    ["", "Enter at least one email address."],
+    [" , ; ", "Enter at least one email address."],
+    ["alex@msp.example, not-an-address", "not-an-address is not an email address."],
+    ["alex@", "alex@ is not an email address."],
+    [null, "Enter at least one email address."],
+  ])("refuses %j", (value, message) => {
+    expect(parseRecipients(value)).toEqual({ ok: false, message });
+  });
+
+  it("allows up to 20 addresses", () => {
+    const list = (n: number) => Array.from({ length: n }, (_, i) => `p${i}@msp.example`).join(",");
+    expect(parseRecipients(list(20))).toMatchObject({ ok: true });
+    expect(parseRecipients(list(21))).toEqual({
+      ok: false,
+      message: "Up to 20 addresses per channel.",
+    });
+  });
+});
+
+describe("createEmailChannelFor", () => {
+  const email = {
+    name: "On-call",
+    recipients: "alex@msp.example, sam@msp.example",
+    incidentTypes: ["failed", "missed", "stale"],
+    notifyOpened: "on",
+    notifyClosed: "on",
+    notifyIntegrationHealth: "on",
+  };
+  const emailDeps = (emailAvailable = true) => ({ db, ip: IP, emailAvailable });
+
+  it("creates the channel with its recipients visible, and audits how many", async () => {
+    const w = await workspace();
+    const state = await createEmailChannelFor(emailDeps(), w.owner, email);
+    expect(state).toMatchObject({ status: "ok", message: "Channel created." });
+    expect(state).not.toHaveProperty("signingSecret");
+    const [channel] = await listChannelsFor({ db }, w.tech);
+    expect(channel).toMatchObject({
+      type: "email",
+      name: "On-call",
+      config: { recipients: ["alex@msp.example", "sam@msp.example"] },
+    });
+    const [entry] = await db.withTenant(w.tenantId, ({ tx }) => tx.auditLog.findMany());
+    expect(entry).toMatchObject({
+      action: "notification_channel.created",
+      metadata: { type: "email", name: "On-call", recipients: 2 },
+    });
+  });
+
+  it("is refused when this server has no email set up, and for technicians", async () => {
+    const w = await workspace();
+    expect(await createEmailChannelFor(emailDeps(false), w.owner, email)).toEqual({
+      status: "error",
+      message: "Email is not set up on this server yet.",
+    });
+    expect((await createEmailChannelFor(emailDeps(), w.tech, email)).status).toBe("error");
+    expect(await listChannelsFor({ db }, w.owner)).toEqual([]);
+  });
+
+  it("checks its fields, and shares the name space with webhooks", async () => {
+    const w = await workspace();
+    expect(
+      await createEmailChannelFor(emailDeps(), w.owner, { ...email, recipients: "nope" }),
+    ).toMatchObject({ fieldErrors: { recipients: "nope is not an email address." } });
+    await createWebhookChannelFor(deps(), w.owner, { ...valid, name: "On-call" });
+    expect(await createEmailChannelFor(emailDeps(), w.owner, email)).toMatchObject({
+      fieldErrors: { name: "A channel with this name already exists." },
+    });
+  });
+});
+
+describe("setChannelEnabledFor and getNotificationsPage", () => {
+  it("turns a channel off and on, auditing each change once", async () => {
+    const w = await workspace();
+    const created = await createWebhookChannelFor(deps(), w.owner, valid);
+    if (created.status !== "ok") throw new Error("expected ok");
+    const id = created.channelId!;
+
+    expect((await setChannelEnabledFor(deps(), w.tech, id, false)).status).toBe("error");
+    expect(await setChannelEnabledFor(deps(), w.owner, id, false)).toEqual({
+      status: "ok",
+      message: "Channel turned off.",
+    });
+    expect(await setChannelEnabledFor(deps(), w.owner, id, false)).toMatchObject({ status: "ok" });
+    expect((await listChannelsFor({ db }, w.owner))[0]!.enabled).toBe(false);
+    await setChannelEnabledFor(deps(), w.owner, id, true);
+    const actions = (
+      await db.withTenant(w.tenantId, ({ tx }) =>
+        tx.auditLog.findMany({ orderBy: { createdAt: "asc" } }),
+      )
+    ).map((entry) => entry.action);
+    expect(actions).toEqual([
+      "notification_channel.created",
+      "notification_channel.disabled",
+      "notification_channel.enabled",
+    ]);
+  });
+
+  it("lists each channel with its recent messages, and nothing secret", async () => {
+    const w = await workspace();
+    const created = await createWebhookChannelFor(deps(), w.owner, valid);
+    if (created.status !== "ok") throw new Error("expected ok");
+    for (let i = 0; i < 7; i += 1)
+      await sendTestNotificationFor(deps(), w.owner, created.channelId!);
+
+    const page = await getNotificationsPage({ db }, w.tech);
+    expect(page.timeZone).toBe("UTC");
+    expect(page.channels).toHaveLength(1);
+    expect(page.channels[0]!.recent).toHaveLength(5);
+    expect(page.channels[0]!.recent[0]).toMatchObject({
+      kind: "test",
+      status: "pending",
+      attempts: 0,
+    });
+    const text = JSON.stringify(page);
+    expect(text).not.toContain("T0K3N");
+    expect(text).not.toContain(created.signingSecret);
+    expect(text).not.toContain("secretEnc");
+  });
+
+  it("refuses another workspace's channel", async () => {
+    const mine = await workspace();
+    const theirs = await workspace();
+    const created = await createWebhookChannelFor(deps(), theirs.owner, valid);
+    if (created.status !== "ok") throw new Error("expected ok");
+    expect(await setChannelEnabledFor(deps(), mine.owner, created.channelId!, false)).toEqual({
+      status: "error",
+      message: "That channel no longer exists.",
+    });
+    expect((await listChannelsFor({ db }, theirs.owner))[0]!.enabled).toBe(true);
   });
 });

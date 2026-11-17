@@ -91,3 +91,4 @@ export {
   type VendorId,
   type VendorInfo,
 } from "./vendors";
+export { escapeHtml, renderNotificationEmail, type RenderedEmail } from "./notifications/email";

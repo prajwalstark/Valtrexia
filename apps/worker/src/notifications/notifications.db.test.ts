@@ -186,6 +186,7 @@ async function setup(vendor: ScriptedVendor) {
     keyProvider,
     logger,
     outboundPolicy: RELAXED,
+    emailSender: null,
     now: () => now,
     ...overrides,
   });

@@ -186,10 +186,18 @@ export function describeAuditEntry(
       return `${user} changed from ${text(meta.from) ?? "?"} to ${text(meta.to) ?? "?"}`;
     case "notification_channel.created": {
       const host = text(meta.host);
-      return `Added the ${text(meta.type) ?? "notification"} channel ${text(meta.name) ?? "?"}${
-        host ? `, sending to ${host}` : ""
-      }`;
+      const recipients = number(meta.recipients);
+      const where = host
+        ? `, sending to ${host}`
+        : recipients !== null
+          ? `, sending to ${count(recipients, "address", "addresses")}`
+          : "";
+      return `Added the ${text(meta.type) ?? "notification"} channel ${text(meta.name) ?? "?"}${where}`;
     }
+    case "notification_channel.enabled":
+      return `Turned on the ${text(meta.type) ?? "notification"} channel ${text(meta.name) ?? "?"}`;
+    case "notification_channel.disabled":
+      return `Turned off the ${text(meta.type) ?? "notification"} channel ${text(meta.name) ?? "?"}`;
     case "notification_channel.deleted":
       return `Deleted the ${text(meta.type) ?? "notification"} channel ${text(meta.name) ?? "?"}`;
     case "tenant.provisioned":

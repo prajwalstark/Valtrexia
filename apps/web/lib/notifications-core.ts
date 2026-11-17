@@ -1,6 +1,7 @@
 import { buildTestPayload, RAISED_INCIDENT_TYPES, type RaisedIncidentType } from "@valtrexia/core";
 import {
   generateWebhookSecret,
+  MAX_EMAIL_RECIPIENTS,
   OutboundRefusedError,
   parseOutboundUrl,
   resolvePublicAddresses,
@@ -11,12 +12,16 @@ import {
 } from "@valtrexia/core/server";
 import {
   ChannelNameTakenError,
+  createEmailChannel,
   createWebhookChannel,
   deleteNotificationChannel,
   listNotificationChannels,
+  listRecentBatches,
   queueTestNotification,
+  setNotificationChannelEnabled,
   type ChannelSummary,
   type Db,
+  type RecentBatch,
 } from "@valtrexia/db";
 import { z } from "zod";
 import type { TenantSession } from "./session-core";
@@ -41,7 +46,7 @@ export interface NotificationDeps {
   now?: Date;
 }
 
-export type ChannelField = "name" | "url" | "incidentTypes";
+export type ChannelField = "name" | "url" | "recipients" | "incidentTypes";
 
 export type ChannelState =
   | { status: "idle" }
@@ -70,23 +75,12 @@ const typesSchema = z
 export async function createWebhookChannelFor(
   deps: NotificationDeps,
   session: TenantSession,
-  input: {
-    name: unknown;
-    url: unknown;
-    incidentTypes: unknown;
-    notifyOpened: unknown;
-    notifyClosed: unknown;
-    notifyIntegrationHealth: unknown;
-  },
+  input: ChannelInput & { url: unknown },
 ): Promise<ChannelState> {
   if (session.role !== "owner") return { status: "error", message: OWNERS_ONLY };
 
   const fieldErrors: Partial<Record<ChannelField, string>> = {};
-  const name = nameSchema.safeParse(input.name);
-  if (!name.success) fieldErrors.name = "Give the channel a name of up to 80 characters.";
-  const types = typesSchema.safeParse(input.incidentTypes);
-  if (!types.success) fieldErrors.incidentTypes = "Choose at least one kind of incident.";
-
+  const { name, types, preferences } = commonFields(input, fieldErrors);
   let url: string | null = null;
   if (typeof input.url !== "string" || input.url.trim() === "") {
     fieldErrors.url = "Enter the URL to send to.";
@@ -116,13 +110,7 @@ export async function createWebhookChannelFor(
       createWebhookChannel(context, deps.keyProvider, {
         name: name.data,
         destination: new Secret({ url, signingSecret }),
-        preferences: {
-          incidentTypes: types.data as RaisedIncidentType[],
-          notifyOpened: input.notifyOpened === true || input.notifyOpened === "on",
-          notifyClosed: input.notifyClosed === true || input.notifyClosed === "on",
-          notifyIntegrationHealth:
-            input.notifyIntegrationHealth === true || input.notifyIntegrationHealth === "on",
-        },
+        preferences: { ...preferences, incidentTypes: types.data },
         actorUserId: session.userId,
         ip: deps.ip ?? null,
       }),
@@ -134,15 +122,159 @@ export async function createWebhookChannelFor(
       signingSecret,
     };
   } catch (error) {
-    if (error instanceof ChannelNameTakenError) {
-      return {
-        status: "error",
-        message: "Check the highlighted fields.",
-        fieldErrors: { name: "A channel with this name already exists." },
-      };
-    }
+    if (error instanceof ChannelNameTakenError) return NAME_TAKEN;
     throw error;
   }
+}
+
+const NAME_TAKEN: ChannelState = {
+  status: "error",
+  message: "Check the highlighted fields.",
+  fieldErrors: { name: "A channel with this name already exists." },
+};
+
+interface ChannelInput {
+  name: unknown;
+  incidentTypes: unknown;
+  notifyOpened: unknown;
+  notifyClosed: unknown;
+  notifyIntegrationHealth: unknown;
+}
+
+/** The fields every kind of channel has, checked the same way for each. */
+function commonFields(input: ChannelInput, fieldErrors: Partial<Record<ChannelField, string>>) {
+  const name = nameSchema.safeParse(input.name);
+  if (!name.success) fieldErrors.name = "Give the channel a name of up to 80 characters.";
+  const parsed = typesSchema.safeParse(input.incidentTypes);
+  if (!parsed.success) fieldErrors.incidentTypes = "Choose at least one kind of incident.";
+  const on = (value: unknown) => value === true || value === "on";
+  return {
+    name,
+    types: parsed.success
+      ? { success: true as const, data: parsed.data as RaisedIncidentType[] }
+      : { success: false as const },
+    preferences: {
+      notifyOpened: on(input.notifyOpened),
+      notifyClosed: on(input.notifyClosed),
+      notifyIntegrationHealth: on(input.notifyIntegrationHealth),
+    },
+  };
+}
+
+const emailSchema = z.email();
+
+/**
+ * Reads a list of email addresses as people type them: separated by commas,
+ * semicolons, spaces or new lines. Repeats are dropped, ignoring case.
+ */
+export function parseRecipients(
+  value: unknown,
+): { ok: true; recipients: string[] } | { ok: false; message: string } {
+  if (typeof value !== "string" || value.trim() === "") {
+    return { ok: false, message: "Enter at least one email address." };
+  }
+  const seen = new Set<string>();
+  const recipients: string[] = [];
+  for (const part of value.split(/[\s,;]+/)) {
+    const address = part.trim();
+    if (address === "") continue;
+    if (!emailSchema.safeParse(address).success || address.length > 254) {
+      return { ok: false, message: `${address.slice(0, 60)} is not an email address.` };
+    }
+    if (seen.has(address.toLowerCase())) continue;
+    seen.add(address.toLowerCase());
+    recipients.push(address);
+  }
+  if (recipients.length === 0) return { ok: false, message: "Enter at least one email address." };
+  if (recipients.length > MAX_EMAIL_RECIPIENTS) {
+    return { ok: false, message: `Up to ${MAX_EMAIL_RECIPIENTS} addresses per channel.` };
+  }
+  return { ok: true, recipients };
+}
+
+/**
+ * Creates an email channel. Owners only, and only when this server has email
+ * set up: a channel that could never send would only look like it worked.
+ */
+export async function createEmailChannelFor(
+  deps: Pick<NotificationDeps, "db" | "ip"> & { emailAvailable: boolean },
+  session: TenantSession,
+  input: ChannelInput & { recipients: unknown },
+): Promise<ChannelState> {
+  if (session.role !== "owner") return { status: "error", message: OWNERS_ONLY };
+  if (!deps.emailAvailable) {
+    return { status: "error", message: "Email is not set up on this server yet." };
+  }
+  const fieldErrors: Partial<Record<ChannelField, string>> = {};
+  const { name, types, preferences } = commonFields(input, fieldErrors);
+  const recipients = parseRecipients(input.recipients);
+  if (!recipients.ok) fieldErrors.recipients = recipients.message;
+  if (!name.success || !types.success || !recipients.ok) {
+    return { status: "error", message: "Check the highlighted fields.", fieldErrors };
+  }
+  try {
+    const channel = await deps.db.withTenant(session.tenantId, (context) =>
+      createEmailChannel(context, {
+        name: name.data,
+        recipients: recipients.recipients,
+        preferences: { ...preferences, incidentTypes: types.data },
+        actorUserId: session.userId,
+        ip: deps.ip ?? null,
+      }),
+    );
+    return { status: "ok", message: "Channel created.", channelId: channel.id };
+  } catch (error) {
+    if (error instanceof ChannelNameTakenError) return NAME_TAKEN;
+    throw error;
+  }
+}
+
+/** Turns a channel on or off. Owners only. */
+export async function setChannelEnabledFor(
+  deps: Pick<NotificationDeps, "db" | "ip">,
+  session: TenantSession,
+  channelId: string,
+  enabled: boolean,
+): Promise<ChannelState> {
+  if (session.role !== "owner") return { status: "error", message: OWNERS_ONLY };
+  if (!z.uuid().safeParse(channelId).success) return { status: "error", message: NOT_FOUND };
+  const found = await deps.db.withTenant(session.tenantId, (context) =>
+    setNotificationChannelEnabled(context, {
+      id: channelId,
+      enabled,
+      actorUserId: session.userId,
+      ip: deps.ip ?? null,
+    }),
+  );
+  if (!found) return { status: "error", message: NOT_FOUND };
+  return { status: "ok", message: enabled ? "Channel turned on." : "Channel turned off." };
+}
+
+/** Messages listed per channel on the page. */
+export const RECENT_PER_CHANNEL = 5;
+
+export interface NotificationsPage {
+  timeZone: string;
+  channels: (ChannelSummary & { recent: RecentBatch[] })[];
+}
+
+/** Everything the notifications page shows. Anyone may look; nothing secret is in it. */
+export async function getNotificationsPage(
+  deps: Pick<NotificationDeps, "db">,
+  session: TenantSession,
+): Promise<NotificationsPage> {
+  return deps.db.withTenant(session.tenantId, async (context) => {
+    const tenant = await context.tx.tenant.findUniqueOrThrow({
+      where: { id: session.tenantId },
+      select: { timeZone: true },
+    });
+    const channels = await listNotificationChannels(context);
+    const recent = await listRecentBatches(context, { perChannel: RECENT_PER_CHANNEL });
+    return {
+      timeZone: tenant.timeZone,
+      channels: channels.map((channel) => ({ ...channel, recent: recent.get(channel.id) ?? [] })),
+    };
+  });
 }
 
 /** Every channel in the workspace, without destinations or secrets. Anyone may look. */

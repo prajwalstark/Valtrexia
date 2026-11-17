@@ -19,7 +19,7 @@ import {
   type Secret,
 } from "@valtrexia/core/server";
 import type { TenantContext } from "../db";
-import type { Prisma } from "../generated/prisma/client";
+import { Prisma } from "../generated/prisma/client";
 import { recordAudit } from "./audit";
 
 /**
@@ -124,6 +124,124 @@ export async function createWebhookChannel(
     ip: input.ip ?? null,
   });
   return channel;
+}
+
+/**
+ * Creates an email channel. Its recipients are kept in `config`, visible to
+ * the workspace: they are colleagues' addresses, not secrets. The audit entry
+ * records how many there are.
+ */
+export async function createEmailChannel(
+  context: TenantContext,
+  input: {
+    name: string;
+    recipients: readonly string[];
+    preferences: ChannelPreferencesInput;
+    actorUserId: string | null;
+    ip?: string | null;
+  },
+): Promise<ChannelSummary> {
+  const { tx, tenantId } = context;
+  if (
+    await tx.notificationChannel.findFirst({ where: { name: input.name }, select: { id: true } })
+  ) {
+    throw new ChannelNameTakenError();
+  }
+  const channel = await tx.notificationChannel.create({
+    data: {
+      tenantId,
+      type: "email",
+      name: input.name,
+      ...input.preferences,
+      incidentTypes: [...input.preferences.incidentTypes],
+      config: { recipients: [...input.recipients] },
+      secretEnc: Prisma.DbNull,
+    },
+    select: channelSummarySelect,
+  });
+  await recordAudit(context, {
+    action: "notification_channel.created",
+    actorUserId: input.actorUserId,
+    targetType: "notification_channel",
+    targetId: channel.id,
+    metadata: { type: "email", name: input.name, recipients: input.recipients.length },
+    ip: input.ip ?? null,
+  });
+  return channel;
+}
+
+/**
+ * Turns a channel on or off, and audits it. A channel turned off is told
+ * nothing new, and what was already queued for it is not sent. Returns false
+ * if the tenant has no such channel; true if it changed or was already so.
+ */
+export async function setNotificationChannelEnabled(
+  context: TenantContext,
+  input: { id: string; enabled: boolean; actorUserId: string | null; ip?: string | null },
+): Promise<boolean> {
+  const existing = await context.tx.notificationChannel.findUnique({
+    where: { id: input.id },
+    select: { id: true, name: true, type: true, enabled: true },
+  });
+  if (!existing) return false;
+  if (existing.enabled === input.enabled) return true;
+  await context.tx.notificationChannel.update({
+    where: { id: existing.id },
+    data: { enabled: input.enabled },
+  });
+  await recordAudit(context, {
+    action: input.enabled ? "notification_channel.enabled" : "notification_channel.disabled",
+    actorUserId: input.actorUserId,
+    targetType: "notification_channel",
+    targetId: existing.id,
+    metadata: { type: existing.type, name: existing.name },
+    ip: input.ip ?? null,
+  });
+  return true;
+}
+
+export interface RecentBatch {
+  id: string;
+  channelId: string;
+  kind: "incidents" | "integration" | "test";
+  status: "pending" | "sent" | "failed";
+  attempts: number;
+  /** A message we wrote about the last failed attempt. */
+  lastError: string | null;
+  createdAt: Date;
+  sentAt: Date | null;
+  nextAttemptAt: Date;
+}
+
+/** The most recent messages for each of the tenant's channels, newest first. */
+export async function listRecentBatches(
+  { tx }: TenantContext,
+  input: { perChannel: number },
+): Promise<Map<string, RecentBatch[]>> {
+  const channels = await tx.notificationChannel.findMany({ select: { id: true } });
+  const byChannel = new Map<string, RecentBatch[]>();
+  for (const channel of channels) {
+    byChannel.set(
+      channel.id,
+      await tx.notificationBatch.findMany({
+        where: { channelId: channel.id },
+        orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+        take: input.perChannel,
+        select: {
+          id: true,
+          channelId: true,
+          kind: true,
+          status: true,
+          attempts: true,
+          lastError: true,
+          createdAt: true,
+          sentAt: true,
+          nextAttemptAt: true,
+        },
+      }),
+    );
+  }
+  return byChannel;
 }
 
 /** Every channel in the tenant, oldest first, without destinations or secrets. */
@@ -330,7 +448,17 @@ export interface ClaimedBatch {
   kind: "incidents" | "integration" | "test";
   payload: unknown;
   attempts: number;
-  channel: { id: string; type: "webhook" | "email"; enabled: boolean; secretEnc: unknown };
+  channel: {
+    id: string;
+    name: string;
+    type: "webhook" | "email";
+    enabled: boolean;
+    secretEnc: unknown;
+    /** What may be shown: for email, the recipients. */
+    config: unknown;
+  };
+  /** The workspace's time zone, for dates in an email. */
+  timeZone: string;
 }
 
 /**
@@ -361,10 +489,14 @@ export async function claimNotificationBatch(
       kind: true,
       payload: true,
       attempts: true,
-      channel: { select: { id: true, type: true, enabled: true, secretEnc: true } },
+      channel: {
+        select: { id: true, name: true, type: true, enabled: true, secretEnc: true, config: true },
+      },
+      tenant: { select: { timeZone: true } },
     },
   });
-  return batch;
+  const { tenant, ...rest } = batch;
+  return { ...rest, timeZone: tenant.timeZone };
 }
 
 export type BatchOutcome =

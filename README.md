@@ -8,7 +8,7 @@ Version 1 is **read-only**. It never starts, stops or changes a backup job.
 
 ## Status
 
-Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and tested. Phase 2 is under way, following [PLAN-PHASE-2.md](./PLAN-PHASE-2.md): steps 1 to 6 of 12 are done (continuous integration; handling of vendor data that stops arriving; the stale-backup rule; asset settings and mute; the incidents page, audit log and workspace settings; the notification outbox and signed webhooks). It is **not production-ready**. Three things have never been run against the real system they depend on, and several production requirements are not built.
+Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and tested. Phase 2 is under way, following [PLAN-PHASE-2.md](./PLAN-PHASE-2.md): steps 1 to 7 of 12 are done (continuous integration; handling of vendor data that stops arriving; the stale-backup rule; asset settings and mute; the incidents page, audit log and workspace settings; the notification outbox and signed webhooks; the notifications page and email channels, short of a real email provider). It is **not production-ready**. Three things have never been run against the real system they depend on, and several production requirements are not built.
 
 **What works, verified here:**
 
@@ -25,7 +25,7 @@ Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and test
 | Datto BCDR      | The connector has never called Datto. Its response shapes are assumptions; see [Datto BCDR](#datto-bcdr) for the list to check. |
 | 3D view         | Only run with software rendering, never on a graphics card.                                                                     |
 
-**What is not built:** the production key provider (KMS), the Unitrends and VSPC connectors, email notifications and the page for managing notification channels, and the items listed in [SECURITY.md](./SECURITY.md).
+**What is not built:** the production key provider (KMS), the Unitrends and VSPC connectors, sending email through a real provider (the provider is not chosen yet; see [Email](#email)), and the items listed in [SECURITY.md](./SECURITY.md).
 
 ### Before production
 
@@ -374,7 +374,9 @@ Opened and closed incidents are also sent to notification channels: see [Notific
 
 ## Notifications
 
-When incidents open or close, or an integration becomes unhealthy or recovers, the people who asked are told. Webhooks work now. Email, and the page for managing channels, come next (step 7 of [PLAN-PHASE-2.md](./PLAN-PHASE-2.md)); until then a channel can only be created in code.
+When incidents open or close, or an integration becomes unhealthy or recovers, the people who asked are told, by webhook or by email.
+
+**The Notifications page** lists every channel, where it sends, what it hears about, and how its last five messages fared: sent, waiting, retrying (with when and why), or not delivered. Owners add channels, send a test message, turn a channel off and on, and delete it; technicians see the same list without the controls. Every change is audited. Changing what a channel hears about means deleting it and adding it again; there is no edit form yet.
 
 **What is sent, and to whom.** A channel chooses which incident types it hears about (failed, missed, stale), whether it hears about openings, closings or both, and whether it hears about integration health.
 
@@ -394,6 +396,19 @@ When incidents open or close, or an integration becomes unhealthy or recovers, t
 | The channel was turned off after it was queued | Not sent                                                                                            |
 
 Each attempt first claims the message for two minutes, so two workers never send it at once. If a worker dies after sending but before recording it, the message is sent again when the claim runs out. That is the one way a receiver can get a message twice, and every attempt at a message carries the same `webhook-id`, so a receiver can recognize the repeat. Exactly-once delivery is not something any sender can promise.
+
+### Email
+
+An email channel sends one email per message to up to 20 addresses, all on the same email. It is written in plain text and in HTML, saying the same thing, with every date in the workspace's time zone: which assets need attention or have recovered, grouped by client, with when each last had a good backup. Names from vendors and people are escaped in the HTML, and line breaks are removed from the subject, so a client called `Acme\r\nBcc: …` cannot add a header.
+
+**No email provider is connected yet** ([decision 1](./PLAN-PHASE-2.md)). Sending goes through an `EmailSender` interface, and each provider is one small implementation of it; everything else (rendering, the outbox, retries) is built and tested. Until then:
+
+| `EMAIL_PROVIDER` | What happens                                                                                                    |
+| ---------------- | --------------------------------------------------------------------------------------------------------------- |
+| empty (default)  | Email channels cannot be added; the page says email is not set up. Anything queued for one is not delivered     |
+| `log`            | Development only: each email is logged by subject and number of recipients, and not sent. Refused in production |
+
+Set the same value for the web app and the worker. A provider failure is retried on the usual schedule when it may pass, and given up on when it will not.
 
 ### Webhooks
 

@@ -394,8 +394,8 @@ model NotificationChannel {
   notifyIntegrationHealth Boolean                 @default(true) @map("notify_integration_health")
   /// What may be shown in the interface: a hint of the destination, never the destination itself.
   config                  Json                    @default("{}")
-  /// Envelope-encrypted destination and signing secret. Never selected for the browser.
-  secretEnc               Json                    @map("secret_enc")
+  /// Envelope-encrypted destination and signing secret. Never selected for the browser. Null for email.
+  secretEnc               Json?                   @map("secret_enc")
   createdAt               DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt               DateTime                @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
