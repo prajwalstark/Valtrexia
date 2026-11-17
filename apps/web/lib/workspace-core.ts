@@ -1,7 +1,14 @@
 import { MAX_GRACE_HOURS, MIN_GRACE_HOURS } from "@valtrexia/core";
-import { recordAudit, type Db } from "@valtrexia/db";
+import {
+  cancelTenantDeletion,
+  getPendingDeletion,
+  recordAudit,
+  requestTenantDeletion,
+  type Db,
+  type PendingDeletion,
+} from "@valtrexia/db";
 import { z } from "zod";
-import { isTimeZone } from "./format";
+import { formatDate, isTimeZone } from "./format";
 import type { TenantSession } from "./session-core";
 
 /**
@@ -15,6 +22,8 @@ export interface WorkspaceSettings {
   timeZone: string;
   /** Hours allowed past an asset's expected frequency before a backup counts as missed. */
   graceHours: number;
+  /** Set while the workspace is waiting to be deleted. */
+  deletion: PendingDeletion | null;
 }
 
 export type WorkspaceField = "timeZone" | "graceHours";
@@ -29,12 +38,13 @@ export async function getWorkspaceSettings(
   deps: { db: Db },
   session: TenantSession,
 ): Promise<WorkspaceSettings> {
-  return deps.db.withTenant(session.tenantId, ({ tx }) =>
-    tx.tenant.findUniqueOrThrow({
+  return deps.db.withTenant(session.tenantId, async (context) => {
+    const settings = await context.tx.tenant.findUniqueOrThrow({
       where: { id: session.tenantId },
       select: { name: true, timeZone: true, graceHours: true },
-    }),
-  );
+    });
+    return { ...settings, deletion: await getPendingDeletion(context) };
+  });
 }
 
 const graceSchema = z.coerce.number().int().min(MIN_GRACE_HOURS).max(MAX_GRACE_HOURS);
@@ -100,4 +110,66 @@ export async function updateWorkspaceSettings(
           : "Saved. Incidents follow the new grace period from the next sync, within a few minutes.",
     };
   });
+}
+
+export type DeletionState =
+  | { status: "idle" }
+  | { status: "ok"; message: string }
+  | { status: "error"; message: string; fieldError?: string };
+
+/**
+ * Marks the workspace for deletion after the hold. Owners only, and only with
+ * the workspace's name typed out, so it cannot happen by a stray click.
+ * Nothing is deleted until the hold has passed, and it can be cancelled until then.
+ */
+export async function requestWorkspaceDeletion(
+  deps: { db: Db; ip?: string | null; now?: () => Date },
+  session: TenantSession,
+  confirmName: unknown,
+): Promise<DeletionState> {
+  if (session.role !== "owner") {
+    return { status: "error", message: "Only workspace owners can delete the workspace." };
+  }
+  return deps.db.withTenant(session.tenantId, async (context) => {
+    const { name, timeZone } = await context.tx.tenant.findUniqueOrThrow({
+      where: { id: session.tenantId },
+      select: { name: true, timeZone: true },
+    });
+    if (typeof confirmName !== "string" || confirmName.trim() !== name) {
+      return {
+        status: "error",
+        message: "Nothing was changed.",
+        fieldError: "Type the workspace’s name exactly as shown.",
+      };
+    }
+    const { pending, changed } = await requestTenantDeletion(context, {
+      reason: "owner_request",
+      now: (deps.now ?? (() => new Date()))(),
+      actorUserId: session.userId,
+      ip: deps.ip ?? null,
+    });
+    const on = formatDate(pending.deleteAfter, timeZone);
+    return {
+      status: "ok",
+      message: changed
+        ? `The workspace and all its data will be deleted on ${on}. Syncing and notifications have stopped.`
+        : `The workspace was already scheduled for deletion on ${on}.`,
+    };
+  });
+}
+
+/** Cancels a pending deletion. Owners only. */
+export async function cancelWorkspaceDeletion(
+  deps: { db: Db; ip?: string | null },
+  session: TenantSession,
+): Promise<DeletionState> {
+  if (session.role !== "owner") {
+    return { status: "error", message: "Only workspace owners can cancel a deletion." };
+  }
+  const cancelled = await deps.db.withTenant(session.tenantId, (context) =>
+    cancelTenantDeletion(context, { actorUserId: session.userId, ip: deps.ip ?? null }),
+  );
+  return cancelled
+    ? { status: "ok", message: "Deletion cancelled. Syncing resumes within a few minutes." }
+    : { status: "ok", message: "The workspace was not scheduled for deletion." };
 }

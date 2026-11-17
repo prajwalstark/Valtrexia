@@ -204,6 +204,16 @@ export function describeAuditEntry(
       return entry.targetType === "notification_channel"
         ? `Moved the saved destination of the channel ${text(meta.name) ?? "?"} to a new encryption key`
         : `Moved the saved keys of ${integration} to a new encryption key`;
+    case "workspace.deletion_requested": {
+      const after = typeof meta.deleteAfter === "string" ? new Date(meta.deleteAfter) : null;
+      const when =
+        after && !Number.isNaN(after.getTime()) ? ` on ${formatDate(after, timeZone)}` : "";
+      return meta.reason === "organization_deleted"
+        ? `The organization was deleted; the workspace’s data will be deleted${when}`
+        : `Scheduled the workspace for deletion${when}`;
+    }
+    case "workspace.deletion_cancelled":
+      return "Cancelled the workspace’s deletion";
     case "tenant.provisioned":
       return "Created the workspace";
     case "workspace.settings_changed": {

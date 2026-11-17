@@ -245,6 +245,15 @@ No date in the app can be shown without a time zone: the formatting functions re
 
 **Grace period.** How long past its expected time a backup may be before it counts as missed, for every asset: 0 to 168 hours, 2 by default. Pages apply a new value at once; incidents follow from the next sync.
 
+### Deleting a workspace
+
+A workspace is deleted in two stages (decision 7), whether an owner asks for it on the Settings page (typing the workspace's name to confirm) or its organization is deleted in Clerk:
+
+1. **Marked.** Syncing and notifications stop at the next scheduler tick, and every page shows when the data will be deleted. Nothing is removed yet. An owner can cancel, and syncing resumes. The Clerk organization and its members are untouched; an organization deleted in Clerk can no longer be signed in to, so only an operator could undo that one, by clearing the three deletion columns on the tenant.
+2. **Deleted, 30 days later.** The maintenance job removes the tenant and, by cascade, every row it owns: clients, assets, results, incidents, encrypted credentials, notification channels and the audit log. The deletion is recorded in `tenant_deletions` (tenant id, Clerk organization id, name, reason, dates), a table the app's database role cannot read.
+
+The database refuses a hold shorter than seven days, and only the `purge_due_tenants` function can delete a tenant; the app role cannot. Repeated requests never move the date. Requests and cancellations are audited. There is no export yet.
+
 ## Integrations
 
 Owners connect vendors on the Integrations page. Technicians can see what is connected and its sync state, but cannot test, change or remove anything.

@@ -331,6 +331,19 @@ describe("describeAuditEntry", () => {
     ).toBe("Moved the saved destination of the channel Ops webhook to a new encryption key");
   });
 
+  it("describes a scheduled and a cancelled deletion, in the workspace's time zone", () => {
+    const deleteAfter = "2026-12-20T09:00:00.000Z";
+    expect(
+      say("workspace.deletion_requested", null, { reason: "owner_request", deleteAfter }),
+    ).toBe("Scheduled the workspace for deletion on 20 Dec 2026");
+    expect(
+      say("workspace.deletion_requested", null, { reason: "organization_deleted", deleteAfter }),
+    ).toBe("The organization was deleted; the workspace’s data will be deleted on 20 Dec 2026");
+    expect(say("workspace.deletion_cancelled", null, { reason: "owner_request" })).toBe(
+      "Cancelled the workspace’s deletion",
+    );
+  });
+
   it("describes mutes: dated, open-ended, for a whole client, and what they closed", () => {
     const dated = {
       until: "2026-11-19T15:00:00.000Z",

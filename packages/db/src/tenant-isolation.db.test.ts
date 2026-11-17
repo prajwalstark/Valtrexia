@@ -59,8 +59,11 @@ describe("catalog: every table is protected", () => {
     const result = await owner.query<{ tablename: string }>(`
       SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename
     `);
+    // tenant_deletions records workspaces that no longer exist: the
+    // operator's, not any tenant's. The runtime role has no privileges on it
+    // (offboarding.db.test.ts).
     expect(result.rows.map((row) => row.tablename)).toEqual(
-      [...TENANT_TABLES, "tenants", "_prisma_migrations"].sort(),
+      [...TENANT_TABLES, "tenants", "tenant_deletions", "_prisma_migrations"].sort(),
     );
   });
 
@@ -123,6 +126,7 @@ describe("catalog: every table is protected", () => {
       "list_due_notification_batches",
       "list_encrypted_records",
       "provision_tenant",
+      "purge_due_tenants",
       "resolve_tenant_id",
     ]);
     for (const row of result.rows) {

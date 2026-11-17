@@ -114,6 +114,12 @@ export interface Db {
     batchSize?: number;
   }): Promise<RetentionBatch>;
 
+  /**
+   * Deletes up to `limit` workspaces whose deletion hold has passed, with
+   * everything they own, recording each outside the tenant. Returns their ids.
+   */
+  purgeDueTenants(input?: { limit?: number }): Promise<string[]>;
+
   /** How many records of each type are wrapped under each key, across all tenants. */
   countEncryptedRecordsByKey(): Promise<
     { type: EncryptedRecordType; keyId: string | null; records: number }[]
@@ -230,6 +236,13 @@ export function createDb({ url, maxConnections = 10 }: CreateDbOptions): Db {
         resultsDeleted: Number(row?.results_deleted ?? 0),
         auditDeleted: Number(row?.audit_deleted ?? 0),
       };
+    },
+
+    async purgeDueTenants({ limit = 10 } = {}) {
+      const rows = await prisma.$queryRaw<{ deleted_tenant_id: string }[]>`
+        SELECT deleted_tenant_id FROM purge_due_tenants(${Math.floor(limit)}::int)
+      `;
+      return rows.map((row) => row.deleted_tenant_id);
     },
 
     async countEncryptedRecordsByKey() {

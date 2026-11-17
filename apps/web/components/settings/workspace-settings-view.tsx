@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { PageHeader } from "@/components/shell/page-header";
 import { Notice } from "@/components/ui/notice";
-import { count, formatDateTime } from "@/lib/format";
+import { count, formatDate, formatDateTime } from "@/lib/format";
 import type { WorkspaceSettings } from "@/lib/workspace-core";
 
 /** A zone as it is offered in the list: "America/New York (GMT-5)". */
@@ -18,11 +18,14 @@ export function WorkspaceSettingsView({
   canManage,
   now,
   formSlot,
+  deletionSlot,
 }: {
   settings: WorkspaceSettings;
   canManage: boolean;
   now: Date;
   formSlot: ReactNode;
+  /** The form to schedule or cancel deletion; owners only. */
+  deletionSlot?: ReactNode;
 }) {
   return (
     <>
@@ -50,6 +53,32 @@ export function WorkspaceSettingsView({
           </Notice>
         </>
       )}
+
+      <section
+        className="mt-16 max-w-xl border-t border-line pt-8"
+        aria-labelledby="delete-heading"
+      >
+        <h2 id="delete-heading" className="text-lg font-semibold">
+          Delete workspace
+        </h2>
+        {settings.deletion ? (
+          <Notice kind="error" className="mt-4">
+            {settings.deletion.reason === "organization_deleted"
+              ? "This workspace’s organization was deleted."
+              : "An owner asked for this workspace to be deleted."}{" "}
+            Its data will be deleted on{" "}
+            {formatDate(settings.deletion.deleteAfter, settings.timeZone)}. Syncing and
+            notifications have stopped.
+          </Notice>
+        ) : null}
+        {canManage && deletionSlot ? (
+          <div className="mt-5">{deletionSlot}</div>
+        ) : !settings.deletion ? (
+          <p className="mt-3 text-sm text-muted-foreground">
+            Only workspace owners can delete the workspace.
+          </p>
+        ) : null}
+      </section>
     </>
   );
 }

@@ -92,3 +92,4 @@ export {
   type VendorInfo,
 } from "./vendors";
 export { escapeHtml, renderNotificationEmail, type RenderedEmail } from "./notifications/email";
+export { DELETION_HOLD_DAYS, deleteAfterFor, type DeletionReason } from "./offboarding";

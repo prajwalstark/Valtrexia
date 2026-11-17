@@ -111,6 +111,16 @@ enum IncidentEvent {
   @@map("incident_event")
 }
 
+/// Why a workspace is waiting to be deleted.
+enum TenantDeletionReason {
+  /// Its organization was deleted in Clerk.
+  organization_deleted
+  /// An owner asked for it in workspace settings.
+  owner_request
+
+  @@map("tenant_deletion_reason")
+}
+
 enum UserRole {
   owner
   technician
@@ -127,15 +137,20 @@ enum ActorType {
 
 /// One managed service provider. Maps 1:1 to a Clerk organization.
 model Tenant {
-  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  clerkOrgId String   @unique @map("clerk_org_id")
-  name       String
+  id                  String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clerkOrgId          String                @unique @map("clerk_org_id")
+  name                String
   /// Hours added to an asset's expected frequency before it counts as missed.
-  graceHours Int      @default(2) @map("grace_hours")
+  graceHours          Int                   @default(2) @map("grace_hours")
   /// IANA time zone the workspace reads dates and days in. Everything is stored in UTC.
-  timeZone   String   @default("UTC") @map("time_zone")
-  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  timeZone            String                @default("UTC") @map("time_zone")
+  /// Set when the workspace is to be deleted. Syncing and notifications stop at once.
+  deletionRequestedAt DateTime?             @map("deletion_requested_at") @db.Timestamptz(3)
+  /// When its data is deleted: the end of the hold.
+  deleteAfter         DateTime?             @map("delete_after") @db.Timestamptz(3)
+  deletionReason      TenantDeletionReason? @map("deletion_reason")
+  createdAt           DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   users                  User[]
   integrations           Integration[]
@@ -460,4 +475,19 @@ model NotificationDelivery {
   @@unique([incidentId, event, channelId])
   @@index([tenantId, batchId])
   @@map("notification_deliveries")
+}
+
+/// A workspace that was deleted. Kept outside any tenant, because the
+/// tenant's own audit log is deleted with it. Not readable by the runtime role.
+model TenantDeletion {
+  id              String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// The deleted tenant's id. Not a foreign key: the tenant no longer exists.
+  deletedTenantId String               @map("deleted_tenant_id") @db.Uuid
+  clerkOrgId      String               @map("clerk_org_id")
+  tenantName      String               @map("tenant_name")
+  reason          TenantDeletionReason
+  requestedAt     DateTime             @map("requested_at") @db.Timestamptz(3)
+  deletedAt       DateTime             @default(now()) @map("deleted_at") @db.Timestamptz(3)
+
+  @@map("tenant_deletions")
 }

@@ -4,7 +4,12 @@ import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { muteAssets } from "./asset-settings-core";
 import { getClientDetail, getFleetOverview } from "./dashboard-core";
 import type { TenantSession } from "./session-core";
-import { getWorkspaceSettings, updateWorkspaceSettings } from "./workspace-core";
+import {
+  cancelWorkspaceDeletion,
+  getWorkspaceSettings,
+  requestWorkspaceDeletion,
+  updateWorkspaceSettings,
+} from "./workspace-core";
 
 const urls = inject("databaseUrls");
 const HOUR = 3_600_000;
@@ -90,7 +95,7 @@ const audit = (tenantId: string) =>
 describe("getWorkspaceSettings", () => {
   it("starts in UTC with two hours of grace, readable by anyone in the workspace", async () => {
     const w = await workspace();
-    const expected = { name: "Northwind IT", timeZone: "UTC", graceHours: 2 };
+    const expected = { name: "Northwind IT", timeZone: "UTC", graceHours: 2, deletion: null };
     expect(await getWorkspaceSettings({ db }, w.owner)).toEqual(expected);
     expect(await getWorkspaceSettings({ db }, w.tech)).toEqual(expected);
   });
@@ -129,6 +134,7 @@ describe("updateWorkspaceSettings", () => {
       name: "Northwind IT",
       timeZone: "America/New_York",
       graceHours: 6,
+      deletion: null,
     });
     expect(await audit(w.tenantId)).toMatchObject([
       {
@@ -291,5 +297,70 @@ describe("what the grace period changes", () => {
       unknown: 0,
       success: 1,
     });
+  });
+});
+
+describe("deleting the workspace", () => {
+  it("schedules deletion after 30 days for an owner who types the name, and can be cancelled", async () => {
+    const w = await workspace();
+    const at = new Date("2026-11-20T09:00:00Z");
+    const state = await requestWorkspaceDeletion(
+      { db, ip: IP, now: () => at },
+      w.owner,
+      " Northwind IT ",
+    );
+    expect(state).toEqual({
+      status: "ok",
+      message:
+        "The workspace and all its data will be deleted on 20 Dec 2026. Syncing and notifications have stopped.",
+    });
+    expect((await getWorkspaceSettings({ db }, w.tech)).deletion).toEqual({
+      requestedAt: at,
+      deleteAfter: new Date("2026-12-20T09:00:00Z"),
+      reason: "owner_request",
+    });
+    // Asking again does not move the date.
+    expect(
+      await requestWorkspaceDeletion(
+        { db, now: () => new Date("2026-11-25T00:00:00Z") },
+        w.owner,
+        "Northwind IT",
+      ),
+    ).toMatchObject({
+      message: "The workspace was already scheduled for deletion on 20 Dec 2026.",
+    });
+
+    expect(await cancelWorkspaceDeletion({ db, ip: IP }, w.owner)).toEqual({
+      status: "ok",
+      message: "Deletion cancelled. Syncing resumes within a few minutes.",
+    });
+    expect((await getWorkspaceSettings({ db }, w.owner)).deletion).toBeNull();
+    const audit = await db.withTenant(w.tenantId, ({ tx }) =>
+      tx.auditLog.findMany({
+        where: { action: { startsWith: "workspace.deletion" } },
+        orderBy: { createdAt: "asc" },
+      }),
+    );
+    expect(audit).toMatchObject([
+      { action: "workspace.deletion_requested", actorUserId: w.owner.userId, ip: IP },
+      { action: "workspace.deletion_cancelled", actorUserId: w.owner.userId, ip: IP },
+    ]);
+  });
+
+  it("refuses without the exact name, and refuses technicians", async () => {
+    const w = await workspace();
+    for (const typed of ["Northwind", "northwind it", "", null]) {
+      expect(await requestWorkspaceDeletion({ db }, w.owner, typed)).toMatchObject({
+        status: "error",
+        fieldError: "Type the workspace’s name exactly as shown.",
+      });
+    }
+    expect(await requestWorkspaceDeletion({ db }, w.tech, "Northwind IT")).toEqual({
+      status: "error",
+      message: "Only workspace owners can delete the workspace.",
+    });
+    await requestWorkspaceDeletion({ db }, w.owner, "Northwind IT");
+    expect(await cancelWorkspaceDeletion({ db }, w.tech)).toMatchObject({ status: "error" });
+    expect((await getWorkspaceSettings({ db }, w.owner)).deletion).not.toBeNull();
   });
 });

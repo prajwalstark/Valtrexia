@@ -19,6 +19,12 @@ export { InvalidTenantIdError, UnsafeDatabaseRoleError } from "./errors";
 export { recordAudit, recordAudits, type AuditEntry } from "./repositories/audit";
 export { rewrapRecord, type RewrapOutcome } from "./repositories/key-rotation";
 export {
+  cancelTenantDeletion,
+  getPendingDeletion,
+  requestTenantDeletion,
+  type PendingDeletion,
+} from "./repositories/offboarding";
+export {
   deactivateUser,
   upsertUser,
   type UserChange,

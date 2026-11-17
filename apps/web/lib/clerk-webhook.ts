@@ -1,4 +1,4 @@
-import { deactivateUser, upsertUser, type Db } from "@valtrexia/db";
+import { deactivateUser, requestTenantDeletion, upsertUser, type Db } from "@valtrexia/db";
 import { roleFromOrgRole } from "./session-core";
 
 /**
@@ -31,7 +31,7 @@ export type WebhookOutcome =
   | "tenant-renamed"
   | "user-synced"
   | "user-deactivated"
-  | "noted"
+  | "tenant-deletion-scheduled"
   | "ignored";
 
 const HANDLED = new Set<string>([
@@ -52,7 +52,11 @@ export function isHandledEvent(event: { type: string }): event is ClerkEvent {
  * idempotent, because webhooks are delivered at least once and can arrive
  * out of order or after the user has already signed in.
  */
-export async function handleClerkEvent(db: Db, event: ClerkEvent): Promise<WebhookOutcome> {
+export async function handleClerkEvent(
+  db: Db,
+  event: ClerkEvent,
+  now: () => Date = () => new Date(),
+): Promise<WebhookOutcome> {
   switch (event.type) {
     case "organization.created": {
       await db.provisionTenant({ clerkOrgId: event.data.id, name: event.data.name });
@@ -74,10 +78,23 @@ export async function handleClerkEvent(db: Db, event: ClerkEvent): Promise<Webho
       return renamed ? "tenant-renamed" : "ignored";
     }
 
-    case "organization.deleted":
-      // Deliberately not automatic. Removing a tenant destroys its backup
-      // history and audit trail, so it is a deliberate operator action.
-      return "noted";
+    case "organization.deleted": {
+      // Not deleted at once (decision 7): the workspace is marked, syncing
+      // and notifications stop, and its data is deleted after the hold. An
+      // organization deleted by mistake can be recovered by an operator in
+      // that time. Nobody can sign in to it meanwhile: the organization is gone.
+      if (!event.data.id) return "ignored";
+      const tenantId = await db.resolveTenantId(event.data.id);
+      if (!tenantId) return "ignored";
+      const { changed } = await db.withTenant(tenantId, (context) =>
+        requestTenantDeletion(context, {
+          reason: "organization_deleted",
+          now: now(),
+          actorUserId: null,
+        }),
+      );
+      return changed ? "tenant-deletion-scheduled" : "ignored";
+    }
 
     case "organizationMembership.created":
     case "organizationMembership.updated": {

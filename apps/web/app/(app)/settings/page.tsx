@@ -4,7 +4,13 @@ import {
   timeZoneOption,
   WorkspaceSettingsView,
 } from "@/components/settings/workspace-settings-view";
-import { updateWorkspaceAction } from "@/lib/actions/workspace";
+import { DELETION_HOLD_DAYS } from "@valtrexia/core";
+import { CancelDeletionForm, RequestDeletionForm } from "@/components/settings/workspace-deletion";
+import {
+  cancelDeletionAction,
+  requestDeletionAction,
+  updateWorkspaceAction,
+} from "@/lib/actions/workspace";
 import { requireTenant } from "@/lib/auth";
 import { listTimeZones, timeZoneLabel } from "@/lib/format";
 import { getWorkspace } from "@/lib/workspace";
@@ -32,6 +38,17 @@ export default async function SettingsPage() {
           graceHours={settings.graceHours}
           zones={names.map((zone) => timeZoneOption(zone, timeZoneLabel(zone, now)))}
         />
+      }
+      deletionSlot={
+        settings.deletion ? (
+          <CancelDeletionForm action={cancelDeletionAction} />
+        ) : (
+          <RequestDeletionForm
+            workspaceName={settings.name}
+            holdDays={DELETION_HOLD_DAYS}
+            action={requestDeletionAction}
+          />
+        )
       }
     />
   );

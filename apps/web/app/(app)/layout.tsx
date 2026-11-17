@@ -4,7 +4,10 @@ import type { ReactNode } from "react";
 import { Wordmark } from "@/components/brand/logo";
 import { AppNav } from "@/components/shell/app-nav";
 import { Sightline } from "@/components/shell/sightline";
+import { Notice } from "@/components/ui/notice";
 import { getFleet } from "@/lib/fleet";
+import { formatDate } from "@/lib/format";
+import { getWorkspace } from "@/lib/workspace";
 
 /**
  * Command-center shell: a side rail on wide screens, a top bar on narrow ones,
@@ -16,6 +19,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   // actions make that check again themselves, because a layout alone does
   // not protect them.
   const { overview, now, session } = await getFleet();
+  const workspace = await getWorkspace();
   const isOwner = session.role === "owner";
 
   return (
@@ -56,6 +60,20 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         <Sightline overview={overview} now={now} />
 
         <main id="main" className="flex-1 px-4 py-8 md:px-8 md:py-10">
+          {workspace.deletion ? (
+            <Notice kind="error" className="mb-8 max-w-3xl">
+              This workspace will be deleted on{" "}
+              {formatDate(workspace.deletion.deleteAfter, workspace.timeZone)}. Syncing and
+              notifications have stopped.{" "}
+              {isOwner ? (
+                <Link href="/settings" className="underline underline-offset-2">
+                  Cancel in settings
+                </Link>
+              ) : (
+                "An owner can cancel it in settings."
+              )}
+            </Notice>
+          ) : null}
           {children}
         </main>
       </div>
