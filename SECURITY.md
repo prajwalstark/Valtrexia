@@ -61,6 +61,9 @@ These were built and tested in isolation, but never exercised against the real t
 - **Clerk.** Sign-in, MFA setup, organization creation and webhook delivery have not been run against a live Clerk instance. The session and webhook logic is tested with Clerk replaced by fixed inputs.
 - **AWS KMS.** The provider has never called AWS. It is tested against a stand-in that follows KMS's documented behaviour for Encrypt and Decrypt (encryption context, named keys, error names). Check on a real key: that the IAM role's two permissions suffice, that CloudTrail shows the context, and how long a call takes from where the app runs.
 - **Datto.** The connector has never called Datto. Its response shapes are assumptions, listed in the README.
+- **Veeam VSPC and Kaseya UniView.** Both connectors are built from the vendors' published OpenAPI specifications and tested against stand-ins built to them, but have never called a real console or account. What to check is listed in the README.
+- **Email delivery.** Messages are rendered, queued and retried, but no provider is connected yet, so none has been delivered.
+- **Production infrastructure.** TLS to Postgres and Redis is required by configuration checks; it has not been run against a managed database or cache.
 - **The 3D view on a graphics card.** It was only run with software rendering.
 
 ## Open items

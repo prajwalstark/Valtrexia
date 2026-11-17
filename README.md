@@ -8,13 +8,16 @@ Version 1 is **read-only**. It never starts, stops or changes a backup job.
 
 ## Status
 
-Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and tested. Phase 2 is under way, following [PLAN-PHASE-2.md](./PLAN-PHASE-2.md): steps 1 to 11 of 12 are done (continuous integration; handling of vendor data that stops arriving; the stale-backup rule; asset settings and mute; the incidents page, audit log and workspace settings; the notification outbox and signed webhooks; the notifications page and email channels, short of a real email provider; the Veeam Service Provider Console connector; the Kaseya UniView (Unitrends) connector; the AWS KMS key provider and key rotation; hardening: retention, tenant offboarding, shared rate limits, TLS in production and a nonce-based Content-Security-Policy). It is **not production-ready**. Three things have never been run against the real system they depend on, and several production requirements are not built.
+Phases 1 and 2 are complete: all twelve steps of [PLAN.md](./PLAN.md) and of [PLAN-PHASE-2.md](./PLAN-PHASE-2.md) are built and tested. Phase 2 added continuous integration; handling of vendor data that stops arriving; the stale-backup rule; asset settings and mute; the incidents page, audit log and workspace settings; notifications by signed webhook and email (short of a real email provider); the Veeam Service Provider Console and Kaseya UniView (Unitrends) connectors; the AWS KMS key provider and key rotation; and hardening: retention, tenant offboarding, shared rate limits, TLS in production and a nonce-based Content-Security-Policy.
+
+It is **not production-ready**. Clerk, the three vendors and AWS KMS have never been used for real from here; email has no provider yet; and a few production requirements are open (see [SECURITY.md](./SECURITY.md)).
 
 **What works, verified here:**
 
 - The database layer, tenant isolation, encryption, the missed-backup and incident rules, the sync pipeline and the worker, all tested against a real Postgres and Redis.
 - The whole product end to end on the built-in demo vendor: the worker process syncing, statuses and incidents derived, the dashboard and client pages rendering that data.
-- The setup steps below, from a clean machine: [CI](#continuous-integration) runs them on every push, including starting Postgres and Redis with Docker Compose.
+- The setup steps below, from a clean machine: [CI](#continuous-integration) runs them on every push, including starting Postgres and Redis with Docker Compose. At the end of Phase 2 they were also run from a fresh clone into an empty database: install, migrate, seed, `pnpm check`, then the web app and the worker started.
+- The Content-Security-Policy, in a browser on a production build: no violations on the public pages, an injected script blocked.
 
 **What has not been verified:**
 
@@ -32,23 +35,28 @@ Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and test
 
 ### Before production
 
-1. Run the app against a real Clerk instance and walk through sign-up, MFA, onboarding and the webhook.
-2. Connect a real Datto account and reconcile the connector's assumptions with what Datto returns.
-3. Create the AWS KMS key and IAM permissions, and set `VALTREXIA_KEY_PROVIDER=aws-kms` (see [Key management](#key-management)). The local key provider refuses to run in production.
-4. Work through the open items in [SECURITY.md](./SECURITY.md).
+1. Run the app against a real Clerk instance and walk through sign-up, MFA, onboarding and the webhook, including `organization.deleted` (it schedules the workspace's deletion).
+2. Connect a real account of each vendor and check the items listed under [Datto BCDR](#datto-bcdr), [Veeam Service Provider Console](#veeam-service-provider-console) and [Kaseya UniView (Unitrends)](#kaseya-uniview-unitrends).
+3. Choose the email provider and add its `EmailSender` (see [Email](#email)).
+4. Create the AWS KMS key and IAM permissions, and set `VALTREXIA_KEY_PROVIDER=aws-kms` (see [Key management](#key-management)). The local key provider refuses to run in production.
+5. Provide Postgres with TLS (`sslmode=verify-full` in both database URLs) and Redis with TLS and a password (`rediss://`). Both apps refuse to start in production otherwise, and the web app needs Redis there too.
+6. Work through the open items in [SECURITY.md](./SECURITY.md).
 
 ## Repository layout
 
 ```
 apps/
-  worker/         Scheduler, sync queue, sync pipeline, incident engine and seed script.
-  web/            Next.js app: sign-in, onboarding, dashboard, client pages, integrations.
+  worker/         Scheduler, sync queue, sync pipeline, incident engine, notification delivery,
+                  maintenance (retention, workspace deletion), and the seed and key rotation scripts.
+  web/            Next.js app: sign-in, onboarding, dashboard, client pages, incidents,
+                  integrations, notifications, audit log and settings.
 packages/
-  core/           Shared logic: brand, vendors, statuses, the missed-backup rule, health roll-up,
-                  and (server entry only) credential encryption and the redacting logger.
+  core/           Shared logic: brand, vendors, statuses, the backup rules, health roll-up,
+                  notification payloads, and (server entry only) encryption and key providers,
+                  the outbound request guard, email senders and the redacting logger.
   db/             Prisma schema, migrations, row-level security, tenant-scoped access.
-  connectors/     Connector interface, shared HTTP client, the Datto BCDR connector,
-                  and the demo (mock) vendor.
+  connectors/     Connector interface, shared HTTP client, the Datto BCDR, Veeam VSPC and
+                  Kaseya UniView connectors, and the demo (mock) vendor.
 docker/           Files mounted into the local Postgres container.
 ```
 
