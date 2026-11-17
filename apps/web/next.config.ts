@@ -9,10 +9,10 @@ const rootEnv = join(import.meta.dirname, "..", "..", ".env");
 if (existsSync(rootEnv)) process.loadEnvFile(rootEnv);
 
 /**
- * Sent with every response. These are the headers that are safe to set
- * without knowing which hosts the identity provider loads scripts from; a
- * full script-src policy needs those hosts and per-request nonces, and is
- * listed in SECURITY.md as work still to do.
+ * Sent with every response, including ones the proxy does not see (static
+ * files). The full Content-Security-Policy, with a per-request nonce, is set
+ * by the proxy on pages (lib/csp.ts); the one here is a floor that applies
+ * everywhere. A browser enforces both, so it can only tighten.
  */
 const securityHeaders = [
   // The app is never meant to be framed: this blocks clickjacking.

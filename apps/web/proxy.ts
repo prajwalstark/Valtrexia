@@ -1,4 +1,5 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
+import { contentSecurityPolicy } from "@/lib/csp";
 
 /**
  * Routes reachable without a completed session.
@@ -31,9 +32,21 @@ export default clerkMiddleware(
   async (auth, request) => {
     if (!isPublicRoute(request)) await auth.protect();
   },
-  // Without these, a signed-out visitor is sent to Clerk's hosted sign-in
-  // page instead of ours. The same values are set on <ClerkProvider>.
-  { signInUrl: "/sign-in", signUpUrl: "/sign-up" },
+  {
+    // Without these, a signed-out visitor is sent to Clerk's hosted sign-in
+    // page instead of ours. The same values are set on <ClerkProvider>.
+    signInUrl: "/sign-in",
+    signUpUrl: "/sign-up",
+    // A nonce-based policy on every page; see lib/csp.ts.
+    contentSecurityPolicy: {
+      strict: contentSecurityPolicy.strict,
+      directives: {
+        "frame-ancestors": [...contentSecurityPolicy.directives["frame-ancestors"]],
+        "base-uri": [...contentSecurityPolicy.directives["base-uri"]],
+        "object-src": [...contentSecurityPolicy.directives["object-src"]],
+      },
+    },
+  },
 );
 
 export const config = {

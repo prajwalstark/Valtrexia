@@ -8,7 +8,7 @@ Version 1 is **read-only**. It never starts, stops or changes a backup job.
 
 ## Status
 
-Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and tested. Phase 2 is under way, following [PLAN-PHASE-2.md](./PLAN-PHASE-2.md): steps 1 to 10 of 12 are done (continuous integration; handling of vendor data that stops arriving; the stale-backup rule; asset settings and mute; the incidents page, audit log and workspace settings; the notification outbox and signed webhooks; the notifications page and email channels, short of a real email provider; the Veeam Service Provider Console connector; the Kaseya UniView (Unitrends) connector; the AWS KMS key provider and key rotation). It is **not production-ready**. Three things have never been run against the real system they depend on, and several production requirements are not built.
+Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and tested. Phase 2 is under way, following [PLAN-PHASE-2.md](./PLAN-PHASE-2.md): steps 1 to 11 of 12 are done (continuous integration; handling of vendor data that stops arriving; the stale-backup rule; asset settings and mute; the incidents page, audit log and workspace settings; the notification outbox and signed webhooks; the notifications page and email channels, short of a real email provider; the Veeam Service Provider Console connector; the Kaseya UniView (Unitrends) connector; the AWS KMS key provider and key rotation; hardening: retention, tenant offboarding, shared rate limits, TLS in production and a nonce-based Content-Security-Policy). It is **not production-ready**. Three things have never been run against the real system they depend on, and several production requirements are not built.
 
 **What works, verified here:**
 
@@ -144,6 +144,14 @@ The exact names of these settings in the Clerk dashboard may differ from the wor
 `requireOwner()` additionally requires the owner role. Tenant creation, new members, role changes and removals are written to the audit log.
 
 The decision logic lives in `apps/web/lib/session-core.ts` with no Clerk code in it, so it is tested directly against Postgres.
+
+### Content-Security-Policy
+
+Every page is sent with a strict, nonce-based policy (`apps/web/lib/csp.ts`, applied by Clerk's middleware in `proxy.ts`): `script-src 'nonce-…' 'strict-dynamic'`, a new nonce per request. Only scripts the server rendered with that request's nonce run, plus what they load; an injected `<script>` or inline event handler does not. Next.js and `<ClerkProvider dynamic>` put the nonce on their own scripts. The policy also sets `frame-ancestors 'none'`, `base-uri 'self'` and `object-src 'none'`.
+
+Because a nonce changes on every request, every page is rendered per request (`await connection()` in the root layout); a page built ahead of time would have its scripts blocked. Clerk's default directives also allow some hosts this app does not use (Stripe, Google Maps). Browsers that support `strict-dynamic` ignore host lists in `script-src`, so those hosts can load no script; they remain allowed in `connect-src` and `frame-src`. In development the policy also allows `'unsafe-eval'`, which Next's dev server needs.
+
+`next.config.ts` keeps a static floor (`frame-ancestors`, `base-uri`, `object-src`) on every response, including ones the proxy does not handle.
 
 ### Webhook
 
