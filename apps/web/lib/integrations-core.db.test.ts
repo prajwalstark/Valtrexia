@@ -20,7 +20,7 @@ import {
   type ActionState,
   type IntegrationDeps,
 } from "./integrations-core";
-import { createRateLimiter } from "./rate-limit";
+import { createRateLimiter, RateLimiterUnavailableError } from "./rate-limit";
 import type { TenantSession } from "./session-core";
 
 const urls = inject("databaseUrls");
@@ -382,6 +382,21 @@ describe("testNewDattoCredentials", () => {
 
     // Another tenant has its own allowance.
     expect((await testNewDattoCredentials(limited, other, form())).status).toBe("ok");
+  });
+
+  it("refuses a test, without calling the vendor, when the limit cannot be checked", async () => {
+    const session = await newTenant();
+    const api = datto();
+    const down = deps(api.impl, {
+      limiter: { take: () => Promise.reject(new RateLimiterUnavailableError()) },
+    });
+    expect(await testNewDattoCredentials(down, session, form())).toEqual({
+      status: "error",
+      message: "Connection tests are unavailable for a moment. Try again shortly.",
+    });
+    expect(await connectDatto(down, session, form())).toMatchObject({ status: "error" });
+    expect(api.seen).toEqual([]);
+    expect(await listIntegrationsFor({ db }, session)).toEqual([]);
   });
 });
 

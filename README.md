@@ -269,7 +269,7 @@ Owners connect vendors on the Integrations page. Technicians can see what is con
 - They are validated, tested, encrypted (see [Credentials and logs](#credentials-and-logs)) and stored. Nothing the server sends back to the browser contains a key, a ciphertext or anything derived from the secret key.
 - A saved integration shows only the last four characters of its public key. Saved keys cannot be viewed, only replaced.
 - "Test connection" on a saved integration decrypts the keys on the server, uses them, and returns only the outcome.
-- Connection tests are limited to ten per workspace per minute, so the page cannot be used to try keys against a vendor at speed. The limit is held in memory per web instance.
+- Connection tests are limited to ten per workspace per minute, so the page cannot be used to try keys against a vendor at speed. The count is kept in Redis, so every web instance shares one limit; Redis is required in production. Without `REDIS_URL`, in development, it is kept in memory. If Redis cannot be reached, tests are refused with a message saying so, never allowed without a limit.
 - Every test, save, replacement and disconnection is written to the audit log with who did it and the outcome, and never with key material.
 
 **Replacing keys** re-tests and re-encrypts, clears any sync error, and makes the integration due for a sync straight away. Backup history is kept.

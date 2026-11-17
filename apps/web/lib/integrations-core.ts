@@ -34,7 +34,7 @@ import {
   type IntegrationSummary,
 } from "@valtrexia/db";
 import { z } from "zod";
-import type { RateLimiter } from "./rate-limit";
+import { RateLimiterUnavailableError, type RateLimiter } from "./rate-limit";
 import type { TenantSession } from "./session-core";
 
 /**
@@ -81,6 +81,29 @@ export type ActionState =
 const OWNERS_ONLY = "Only workspace owners can manage integrations.";
 const NOT_FOUND = "That integration no longer exists.";
 const TOO_MANY = "Too many connection tests. Wait a minute and try again.";
+/**
+ * Records a connection test against the tenant's limit. Returns the state to
+ * show when it may not go ahead: over the limit, or the limit could not be
+ * checked (a test is refused then, never let through unlimited).
+ */
+async function overLimit(
+  deps: Pick<IntegrationDeps, "limiter" | "logger">,
+  session: TenantSession,
+): Promise<ActionState | null> {
+  try {
+    return (await deps.limiter.take(session.tenantId))
+      ? null
+      : { status: "error", message: TOO_MANY };
+  } catch (error) {
+    if (!(error instanceof RateLimiterUnavailableError)) throw error;
+    deps.logger.error({ err: error }, "rate limiter unavailable; connection test refused");
+    return {
+      status: "error",
+      message: "Connection tests are unavailable for a moment. Try again shortly.",
+    };
+  }
+}
+
 const KEY_SERVICE_DOWN_MESSAGE =
   "The encryption key service could not be reached, so nothing was saved. Try again shortly.";
 
@@ -256,7 +279,8 @@ export async function testNewDattoCredentials(
       fieldErrors: fieldErrors(parsed.error),
     };
   }
-  if (!deps.limiter.take(session.tenantId)) return { status: "error", message: TOO_MANY };
+  const limited = await overLimit(deps, session);
+  if (limited) return limited;
 
   const { publicKey, secretKey } = parsed.data;
   const result = await runTest(
@@ -302,7 +326,8 @@ export async function connectDatto(
       fieldErrors: { name: "An integration with this name already exists. Choose another." },
     };
   }
-  if (!deps.limiter.take(session.tenantId)) return { status: "error", message: TOO_MANY };
+  const limited = await overLimit(deps, session);
+  if (limited) return limited;
 
   const credentials = new Secret({ publicKey, secretKey });
   const test = await runTest(deps, session, "datto_bcdr", credentials, null);
@@ -337,7 +362,8 @@ export async function testSavedIntegration(
 ): Promise<ActionState> {
   if (session.role !== "owner") return { status: "error", message: OWNERS_ONLY };
   if (!z.uuid().safeParse(integrationId).success) return { status: "error", message: NOT_FOUND };
-  if (!deps.limiter.take(session.tenantId)) return { status: "error", message: TOO_MANY };
+  const limited = await overLimit(deps, session);
+  if (limited) return limited;
 
   let loaded;
   try {
@@ -376,7 +402,8 @@ export async function replaceDattoCredentials(
       fieldErrors: fieldErrors(parsed.error),
     };
   }
-  if (!deps.limiter.take(session.tenantId)) return { status: "error", message: TOO_MANY };
+  const limited = await overLimit(deps, session);
+  if (limited) return limited;
 
   const { publicKey, secretKey } = parsed.data;
   const credentials = new Secret({ publicKey, secretKey });
@@ -461,7 +488,8 @@ export async function testNewVspcCredentials(
       fieldErrors: fieldErrors(parsed.error),
     };
   }
-  if (!deps.limiter.take(session.tenantId)) return { status: "error", message: TOO_MANY };
+  const limited = await overLimit(deps, session);
+  if (limited) return limited;
   const { serverUrl, apiKey } = parsed.data;
   const result = await runTest(
     deps,
@@ -505,7 +533,8 @@ export async function connectVspc(
       fieldErrors: { name: "An integration with this name already exists. Choose another." },
     };
   }
-  if (!deps.limiter.take(session.tenantId)) return { status: "error", message: TOO_MANY };
+  const limited = await overLimit(deps, session);
+  if (limited) return limited;
 
   const credentials = new Secret({ serverUrl, apiKey });
   const test = await runTest(deps, session, "veeam_vspc", credentials, null);
@@ -551,7 +580,8 @@ export async function replaceVspcCredentials(
       fieldErrors: fieldErrors(parsed.error),
     };
   }
-  if (!deps.limiter.take(session.tenantId)) return { status: "error", message: TOO_MANY };
+  const limited = await overLimit(deps, session);
+  if (limited) return limited;
 
   const { serverUrl, apiKey } = parsed.data;
   const credentials = new Secret({ serverUrl, apiKey });
@@ -599,7 +629,8 @@ export async function testNewUniviewCredentials(
       fieldErrors: fieldErrors(parsed.error),
     };
   }
-  if (!deps.limiter.take(session.tenantId)) return { status: "error", message: TOO_MANY };
+  const limited = await overLimit(deps, session);
+  if (limited) return limited;
   const { clientId, clientSecret } = parsed.data;
   const result = await runTest(
     deps,
@@ -643,7 +674,8 @@ export async function connectUniview(
       fieldErrors: { name: "An integration with this name already exists. Choose another." },
     };
   }
-  if (!deps.limiter.take(session.tenantId)) return { status: "error", message: TOO_MANY };
+  const limited = await overLimit(deps, session);
+  if (limited) return limited;
 
   const credentials = new Secret({ clientId, clientSecret });
   const test = await runTest(deps, session, "kaseya_uniview", credentials, null);
@@ -691,7 +723,8 @@ export async function replaceUniviewCredentials(
       fieldErrors: fieldErrors(parsed.error),
     };
   }
-  if (!deps.limiter.take(session.tenantId)) return { status: "error", message: TOO_MANY };
+  const limited = await overLimit(deps, session);
+  if (limited) return limited;
 
   const { clientId, clientSecret } = parsed.data;
   const credentials = new Secret({ clientId, clientSecret });
