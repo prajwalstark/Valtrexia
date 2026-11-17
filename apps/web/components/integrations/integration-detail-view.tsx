@@ -61,7 +61,7 @@ export function IntegrationDetailView({
         <dt className="text-subtle-foreground">Vendor</dt>
         <dd>{vendor.name}</dd>
         <dt className="text-subtle-foreground">Keys</dt>
-        <dd>{keyHint(integration.credentialHint) ?? "Stored encrypted"}</dd>
+        <dd>{keyHint(integration.vendor, integration.credentialHint) ?? "Stored encrypted"}</dd>
         <dt className="text-subtle-foreground">Connected</dt>
         <dd>{formatDate(integration.createdAt, timeZone)}</dd>
         <dt className="text-subtle-foreground">Sync</dt>

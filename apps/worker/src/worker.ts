@@ -107,6 +107,7 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
     logger,
     allowMock: options.allowMock,
     syncIntervalMinutes: options.syncIntervalMinutes,
+    ...(options.outboundPolicy ? { outboundPolicy: options.outboundPolicy } : {}),
     ...(options.dattoBaseUrl ? { dattoBaseUrl: options.dattoBaseUrl } : {}),
     ...(options.now ? { now: options.now } : {}),
     ...(options.connectorFactory ? { connectorFactory: options.connectorFactory } : {}),

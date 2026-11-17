@@ -1,10 +1,18 @@
 import type { VendorId } from "@valtrexia/core";
-import type { Logger, Secret } from "@valtrexia/core/server";
+import {
+  createGuardedFetch,
+  type Logger,
+  type OutboundPolicy,
+  type Resolver,
+  type Secret,
+} from "@valtrexia/core/server";
 import { DattoConnector } from "./datto/connector";
 import { dattoCredentialsSchema } from "./datto/credentials";
 import { ConnectorUnavailableError, InvalidCredentialsShapeError } from "./errors";
 import { MockConnector, mockCredentialsSchema } from "./mock/connector";
 import type { Connector } from "./types";
+import { VspcConnector } from "./vspc/connector";
+import { vspcCredentialsSchema } from "./vspc/credentials";
 
 export interface ConnectorDeps {
   /**
@@ -26,6 +34,14 @@ export interface ConnectorDeps {
    * connection test, where a person is waiting.
    */
   maxRetries?: number;
+  /**
+   * What a tenant-supplied server address may be: a VSPC console is the
+   * MSP's own server, named by whoever connects it. Strict unless set for
+   * local development; never relaxed in production.
+   */
+  outboundPolicy?: OutboundPolicy;
+  /** Replaces DNS for tenant-supplied addresses. For tests. */
+  resolver?: Resolver;
 }
 
 /**
@@ -57,8 +73,24 @@ export function createConnector(
         ...(deps.maxRetries !== undefined ? { maxRetries: deps.maxRetries } : {}),
       });
     }
+    case "veeam_vspc": {
+      const parsed = vspcCredentialsSchema.safeParse(credentials.expose());
+      if (!parsed.success) throw new InvalidCredentialsShapeError();
+      return new VspcConnector(parsed.data, {
+        // The console's address came from a person. Every request goes
+        // through the outbound guard: public addresses only, the connection
+        // pinned to the addresses checked, GET only, no redirects followed.
+        fetch:
+          deps.fetch ??
+          createGuardedFetch({
+            policy: deps.outboundPolicy ?? {},
+            ...(deps.resolver ? { resolver: deps.resolver } : {}),
+          }),
+        ...(deps.logger ? { logger: deps.logger } : {}),
+        ...(deps.maxRetries !== undefined ? { maxRetries: deps.maxRetries } : {}),
+      });
+    }
     case "kaseya_uniview":
-    case "veeam_vspc":
       throw new ConnectorUnavailableError("This vendor is planned but not available yet.");
     default: {
       const unreachable: never = vendor;

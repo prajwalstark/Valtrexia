@@ -345,14 +345,39 @@ describe("connector registry", () => {
     }
   });
 
-  it.each(["kaseya_uniview", "veeam_vspc"] as const)(
-    "reports %s as not available yet",
-    (vendor) => {
-      expect(() => createConnector(vendor, creds({}), { allowMock: true })).toThrow(
-        ConnectorUnavailableError,
-      );
-    },
-  );
+  it("reports kaseya_uniview as not available yet", () => {
+    expect(() => createConnector("kaseya_uniview", creds({}), { allowMock: true })).toThrow(
+      ConnectorUnavailableError,
+    );
+  });
+
+  it("builds a VSPC connector from valid credentials, and refuses incomplete ones", () => {
+    const vspc = createConnector(
+      "veeam_vspc",
+      creds({ serverUrl: "https://vspc.example.com:1280", apiKey: "0123456789abcdef0123" }),
+      { allowMock: false },
+    );
+    expect(vspc.vendor).toBe("veeam_vspc");
+    expect(() =>
+      createConnector("veeam_vspc", creds({ serverUrl: "http://vspc.example.com" }), {
+        allowMock: false,
+      }),
+    ).toThrow(InvalidCredentialsShapeError);
+  });
+
+  it("sends a VSPC connector's requests through the outbound guard", async () => {
+    const vspc = createConnector(
+      "veeam_vspc",
+      creds({ serverUrl: "https://10.0.0.5:1280", apiKey: "0123456789abcdef0123" }),
+      { allowMock: false, maxRetries: 0 },
+    );
+    // Refused before connecting, with the guard's own message, and not retried.
+    await expect(vspc.testConnection()).rejects.toMatchObject({
+      name: "DestinationRefusedError",
+      retryable: false,
+      message: "The URL must point to a public address, not a private or internal one.",
+    });
+  });
 
   it("allows demo data only when switched on and never in production", () => {
     expect(isMockAllowed({ VALTREXIA_ENABLE_MOCK: "true", NODE_ENV: "development" })).toBe(true);

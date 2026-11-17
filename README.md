@@ -8,7 +8,7 @@ Version 1 is **read-only**. It never starts, stops or changes a backup job.
 
 ## Status
 
-Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and tested. Phase 2 is under way, following [PLAN-PHASE-2.md](./PLAN-PHASE-2.md): steps 1 to 7 of 12 are done (continuous integration; handling of vendor data that stops arriving; the stale-backup rule; asset settings and mute; the incidents page, audit log and workspace settings; the notification outbox and signed webhooks; the notifications page and email channels, short of a real email provider). It is **not production-ready**. Three things have never been run against the real system they depend on, and several production requirements are not built.
+Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and tested. Phase 2 is under way, following [PLAN-PHASE-2.md](./PLAN-PHASE-2.md): steps 1 to 8 of 12 are done (continuous integration; handling of vendor data that stops arriving; the stale-backup rule; asset settings and mute; the incidents page, audit log and workspace settings; the notification outbox and signed webhooks; the notifications page and email channels, short of a real email provider; the Veeam Service Provider Console connector). It is **not production-ready**. Three things have never been run against the real system they depend on, and several production requirements are not built.
 
 **What works, verified here:**
 
@@ -18,14 +18,15 @@ Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and test
 
 **What has not been verified:**
 
-| Area            | State                                                                                                                           |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| Clerk           | Never run against a live instance. Sign-in, MFA setup, organization creation and webhook delivery are untested end to end.      |
-| Signed-in pages | Because of the above, the pages were checked through a temporary preview route with seeded data, not behind a real session.     |
-| Datto BCDR      | The connector has never called Datto. Its response shapes are assumptions; see [Datto BCDR](#datto-bcdr) for the list to check. |
-| 3D view         | Only run with software rendering, never on a graphics card.                                                                     |
+| Area            | State                                                                                                                                                            |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Clerk           | Never run against a live instance. Sign-in, MFA setup, organization creation and webhook delivery are untested end to end.                                       |
+| Signed-in pages | Because of the above, the pages were checked through a temporary preview route with seeded data, not behind a real session.                                      |
+| Datto BCDR      | The connector has never called Datto. Its response shapes are assumptions; see [Datto BCDR](#datto-bcdr) for the list to check.                                  |
+| Veeam VSPC      | Built from Veeam's published OpenAPI specification, but never run against a real console. See [Veeam Service Provider Console](#veeam-service-provider-console). |
+| 3D view         | Only run with software rendering, never on a graphics card.                                                                                                      |
 
-**What is not built:** the production key provider (KMS), the Unitrends and VSPC connectors, sending email through a real provider (the provider is not chosen yet; see [Email](#email)), and the items listed in [SECURITY.md](./SECURITY.md).
+**What is not built:** the production key provider (KMS), the Unitrends connector, sending email through a real provider (the provider is not chosen yet; see [Email](#email)), and the items listed in [SECURITY.md](./SECURITY.md).
 
 ### Before production
 
@@ -248,6 +249,8 @@ Owners connect vendors on the Integrations page. Technicians can see what is con
 
 **Connecting Datto BCDR.** Enter a REST API public key and secret key from the Datto Partner Portal. "Test connection" checks the pair without saving it. "Save and connect" tests it again and only stores it if Datto accepts it, so a mistyped key is caught immediately rather than as a failed sync later. The test reads one device record and changes nothing.
 
+**Connecting Veeam Service Provider Console.** Enter the console's address and an API key. The same "Test connection" and "Save and connect" apply. The address is checked before anything is sent to it; see [Veeam Service Provider Console](#veeam-service-provider-console).
+
 **What happens to the keys.**
 
 - They are validated, tested, encrypted (see [Credentials and logs](#credentials-and-logs)) and stored. Nothing the server sends back to the browser contains a key, a ciphertext or anything derived from the secret key.
@@ -320,6 +323,41 @@ One connector instance serves one sync and fetches each device's assets once, ho
 9. Whether the API exposes each asset's backup schedule. It is assumed not to, so every Datto asset starts with an expected frequency of 24 hours.
 
 Everything that knows Datto's field names is in `packages/connectors/src/datto/schema.ts`, `normalize.ts` and the `clientOf` function in `connector.ts`. Correcting an assumption means editing those and the fixtures in `fixtures.ts`.
+
+### Veeam Service Provider Console
+
+Built from Veeam's published OpenAPI specification for the VSPC REST API (version 3.6.1, VSPC 9.1), and checked against the 3.5.1 specification (VSPC 8.1): every endpoint and field used exists in both. **It has never been run against a real console.** A stand-in console in `packages/connectors/src/vspc/fixtures.ts`, built to the specification, is what the tests use.
+
+**Connecting.** Each MSP runs its own console, so the person connecting gives its address (the REST API listens on port 1280 by default) and an API key. Create the key in VSPC for a portal administrator or operator, with the REST API scope and **read-only access** (`isReadAccessOnly`): VSPC itself then refuses anything but reads, whatever our code did. The key is sent as `Authorization: Bearer`, with `x-client-version: 3.5.1` on every request, as Veeam asks.
+
+**What is read.**
+
+| Collection                                                        | Becomes                                                                                                                                      |
+| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `organizations/companies`                                         | Clients. Companies being deleted are left out                                                                                                |
+| `infrastructure/backupServers/jobs`                               | Which client each job belongs to (the one it is assigned to, else the one owning its backup server), whether it is enabled, and its schedule |
+| `infrastructure/backupServers/jobs/backupVmJobs/objects`          | VMs, one asset per VM however many jobs protect it, and each job's latest session for it                                                     |
+| `infrastructure/backupAgents`, `infrastructure/backupAgents/jobs` | Computers with a Veeam agent, and each agent job's latest session                                                                            |
+
+Every request asks for only the fields it uses (VSPC's `select`). That also keeps fields we must not hold out of the response altogether: a company's record can carry its owner's password.
+
+**History builds up from the day it is connected.** VSPC reports the latest session of each job, not a history. Each sync stores what the latest session says, keyed by when it started, so a session seen on several syncs is one result, and the next night's session is a new one. A first sync therefore cannot reach back fourteen days as Datto's can. Restore points, which VSPC does list, could fill in past successful backups later.
+
+| VSPC says                           | Normalized |
+| ----------------------------------- | ---------- |
+| `Success`                           | `success`  |
+| `Warning`                           | `warning`  |
+| `Failed`                            | `failed`   |
+| `Running`, `Starting`, `Stopping`   | `running`  |
+| `Unknown`, `None`, or anything else | `unknown`  |
+
+- **A machine is paused** when every job protecting it is disabled.
+- **Expected frequency** is 24 hours for a job on a daily schedule. Other schedules leave it at the default: a periodic schedule's interval is only returned by VSPC 9.1.
+- **Server errors** come back from VSPC as HTTP 520 and are retried. **Rate limiting** (429) gives its wait in the response body rather than a `Retry-After` header; the HTTP client reads either.
+
+**Not covered yet:** replication, backup copy, file share, object storage, public cloud and Microsoft 365 jobs, and agents managed by a backup server rather than by the console. Their machines are not listed, so nothing is wrongly reported about them.
+
+**To check against a real console:** that `select` is honoured on every collection; that an assigned job's `mappedOrganizationUid` is the company, and an unassigned one's `organizationUid` is the provider; that `infrastructure/backupAgents/jobs` lists Linux and Mac agent jobs as well as Windows (its description says Windows only, its schema says all three); that timestamps carry an offset; how a never-run session's times appear; and VSPC's default throttling limits.
 
 ### Demo vendor
 

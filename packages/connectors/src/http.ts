@@ -1,6 +1,7 @@
-import type { Logger } from "@valtrexia/core/server";
+import { OutboundFailedError, OutboundRefusedError, type Logger } from "@valtrexia/core/server";
 import {
   AuthError,
+  DestinationRefusedError,
   InvalidResponseError,
   NetworkError,
   RateLimitError,
@@ -136,6 +137,17 @@ export function createHttpClient(options: HttpClientOptions): HttpClient {
         signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (cause) {
+      // The outbound guard refused the address, or the certificate failed:
+      // say so plainly, and do not retry what cannot change by itself.
+      if (cause instanceof OutboundRefusedError) {
+        throw new DestinationRefusedError(cause.message, { cause });
+      }
+      if (cause instanceof OutboundFailedError && cause.reason === "tls") {
+        throw new DestinationRefusedError(
+          "The server's certificate could not be verified. It must be valid and issued by a trusted authority.",
+          { cause },
+        );
+      }
       const timedOut =
         cause instanceof Error && (cause.name === "TimeoutError" || cause.name === "AbortError");
       // The cause is kept for debugging but its text is not put in the message.
@@ -176,13 +188,18 @@ export function createHttpClient(options: HttpClientOptions): HttpClient {
           }
         }
 
-        // Free the connection before deciding what to do next.
+        // A 429 without a Retry-After header may say how long to wait in its
+        // body (Veeam does). Anything else: free the connection unread.
+        const bodyWait =
+          status === 429 && retryAfter(response) === null
+            ? retryAfterInBody(await response.text().catch(() => ""))
+            : null;
         await response.body?.cancel().catch(() => undefined);
 
         if (status === 401 || status === 403) throw new AuthError(status);
 
         if (status === 429) {
-          const wait = retryAfter(response);
+          const wait = retryAfter(response) ?? bodyWait;
           if (attempt >= maxRetries || (wait !== null && wait > maxRetryAfterMs)) {
             throw new RateLimitError(wait);
           }
@@ -213,6 +230,29 @@ export function createHttpClient(options: HttpClientOptions): HttpClient {
   }
 
   return { getJson };
+}
+
+/**
+ * A wait given in a rate-limited response's JSON body, in milliseconds:
+ * `{ "retryAfter": 25 }` or `{ "errors": [{ "retryAfter": 25 }] }`, in
+ * seconds. Null when there is none. Only this one number is read; the body
+ * is not logged or kept.
+ */
+export function retryAfterInBody(text: string): number | null {
+  if (text.length === 0 || text.length > 64 * 1024) return null;
+  try {
+    const body = JSON.parse(text) as {
+      retryAfter?: unknown;
+      errors?: { retryAfter?: unknown }[];
+    };
+    const value =
+      body.retryAfter ?? body.errors?.find((e) => e.retryAfter !== undefined)?.retryAfter;
+    return typeof value === "number" && Number.isFinite(value) && value >= 0
+      ? Math.ceil(value * 1000)
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 export interface Page<T> {

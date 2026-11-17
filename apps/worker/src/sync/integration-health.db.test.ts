@@ -3,6 +3,7 @@ import { Writable } from "node:stream";
 import {
   AuthError,
   ConnectorUnavailableError,
+  DestinationRefusedError,
   InvalidCredentialsShapeError,
   InvalidResponseError,
   MockConnector,
@@ -219,6 +220,7 @@ describe("sync failure kinds", () => {
     expect(classifyFailure(new VendorError(503))).toBe("vendor");
     expect(classifyFailure(new InvalidResponseError("no items"))).toBe("invalid_response");
     expect(classifyFailure(new ConnectorUnavailableError("off"))).toBe("unavailable");
+    expect(classifyFailure(new DestinationRefusedError("Private address."))).toBe("credentials");
     expect(classifyFailure(new Error("anything"))).toBe("internal");
     expect(classifyFailure("a string")).toBe("internal");
   });

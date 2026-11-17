@@ -166,7 +166,7 @@ export function renderNotificationEmail(
         `${integration.name} has been failing to sync${since ? ` since ${since}` : ""}.`,
         ...(error ? [`The last attempt said: ${error}`] : []),
         needsAction
-          ? "It will keep failing until its keys are replaced in the integration's settings."
+          ? "It will keep failing until its connection details are replaced in the integration's settings."
           : "Syncs are retried every few minutes. Backup statuses for its clients are not being updated until it recovers.",
       ];
       return layout({

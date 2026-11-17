@@ -4,6 +4,8 @@ import {
   createConnector,
   dattoCredentialHint,
   dattoCredentialsSchema,
+  vspcCredentialHint,
+  vspcCredentialsSchema,
   NetworkError,
   RateLimitError,
   VendorError,
@@ -49,7 +51,9 @@ export interface IntegrationDeps {
   ip?: string | null;
 }
 
-export type FieldErrors = Partial<Record<"name" | "publicKey" | "secretKey" | "confirm", string>>;
+export type FieldErrors = Partial<
+  Record<"name" | "publicKey" | "secretKey" | "serverUrl" | "apiKey" | "confirm", string>
+>;
 
 export type ActionState =
   | { status: "idle" }
@@ -75,7 +79,13 @@ function fieldErrors(error: z.ZodError): FieldErrors {
   const out: FieldErrors = {};
   for (const issue of error.issues) {
     const field = issue.path[0];
-    if (field === "name" || field === "publicKey" || field === "secretKey") {
+    if (
+      field === "name" ||
+      field === "publicKey" ||
+      field === "secretKey" ||
+      field === "serverUrl" ||
+      field === "apiKey"
+    ) {
       out[field] ??= issue.code === "invalid_type" ? "This field is required." : issue.message;
     }
   }
@@ -93,7 +103,10 @@ function describeTestFailure(
   if (error instanceof AuthError) {
     return {
       outcome: "rejected",
-      message: `${name} rejected these keys. Check that both were copied in full and that the key pair is active.`,
+      message:
+        vendor === "veeam_vspc"
+          ? `${name} rejected this API key. Check that it was copied in full, is enabled, and has the REST API scope.`
+          : `${name} rejected these keys. Check that both were copied in full and that the key pair is active.`,
     };
   }
   if (error instanceof RateLimitError) {
@@ -133,7 +146,7 @@ async function runTest(
     await createConnector(vendor, credentials, deps.connectorDeps).testConnection();
     result = {
       outcome: "ok",
-      message: `Connected. ${getVendor(vendor).name} accepted these keys.`,
+      message: `Connected. ${getVendor(vendor).name} accepted ${vendor === "veeam_vspc" ? "this API key" : "these keys"}.`,
     };
   } catch (error) {
     result = describeTestFailure(vendor, error);
@@ -359,4 +372,135 @@ export async function disconnectIntegration(
     status: "ok",
     message: `${removed.name} was disconnected and ${removed.assetsRemoved} assets were removed.`,
   };
+}
+
+const vspcFormSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .max(60, "Use 60 characters or fewer.")
+    .transform((value) => value || getVendor("veeam_vspc").name),
+  serverUrl: vspcCredentialsSchema.shape.serverUrl,
+  apiKey: vspcCredentialsSchema.shape.apiKey,
+});
+
+/** Checks a VSPC address and API key without saving them. */
+export async function testNewVspcCredentials(
+  deps: IntegrationDeps,
+  session: TenantSession,
+  input: unknown,
+): Promise<ActionState> {
+  if (session.role !== "owner") return { status: "error", message: OWNERS_ONLY };
+  const parsed = vspcFormSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      status: "error",
+      message: "Check the highlighted fields.",
+      fieldErrors: fieldErrors(parsed.error),
+    };
+  }
+  if (!deps.limiter.take(session.tenantId)) return { status: "error", message: TOO_MANY };
+  const { serverUrl, apiKey } = parsed.data;
+  const result = await runTest(
+    deps,
+    session,
+    "veeam_vspc",
+    new Secret({ serverUrl, apiKey }),
+    null,
+  );
+  return result.outcome === "ok"
+    ? { status: "ok", message: result.message }
+    : { status: "error", message: result.message };
+}
+
+/**
+ * Saves a VSPC console as a new integration, after a connection test passes.
+ * The address and the key are stored encrypted together; only the host and
+ * the key's last four characters are kept in the clear, as a reminder.
+ */
+export async function connectVspc(
+  deps: IntegrationDeps,
+  session: TenantSession,
+  input: unknown,
+): Promise<ActionState> {
+  if (session.role !== "owner") return { status: "error", message: OWNERS_ONLY };
+  const parsed = vspcFormSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      status: "error",
+      message: "Check the highlighted fields.",
+      fieldErrors: fieldErrors(parsed.error),
+    };
+  }
+  const { name, serverUrl, apiKey } = parsed.data;
+  const taken = await deps.db.withTenant(session.tenantId, (context) =>
+    integrationNameExists(context, name),
+  );
+  if (taken) {
+    return {
+      status: "error",
+      message: "Check the highlighted fields.",
+      fieldErrors: { name: "An integration with this name already exists. Choose another." },
+    };
+  }
+  if (!deps.limiter.take(session.tenantId)) return { status: "error", message: TOO_MANY };
+
+  const credentials = new Secret({ serverUrl, apiKey });
+  const test = await runTest(deps, session, "veeam_vspc", credentials, null);
+  if (test.outcome !== "ok") return { status: "error", message: `Not saved. ${test.message}` };
+
+  const integration = await deps.db.withTenant(session.tenantId, (context) =>
+    createIntegration(context, deps.keyProvider, {
+      vendor: "veeam_vspc",
+      name,
+      credentials,
+      credentialHint: vspcCredentialHint({ serverUrl, apiKey }),
+      actorUserId: session.userId,
+      ip: deps.ip ?? null,
+    }),
+  );
+  return {
+    status: "ok",
+    message: `${name} is connected. The first sync starts within a few minutes.`,
+    integrationId: integration.id,
+  };
+}
+
+/** Replaces a VSPC integration's address and key, after testing the new ones. */
+export async function replaceVspcCredentials(
+  deps: IntegrationDeps,
+  session: TenantSession,
+  integrationId: string,
+  input: unknown,
+): Promise<ActionState> {
+  if (session.role !== "owner") return { status: "error", message: OWNERS_ONLY };
+  const existing = await getIntegrationFor(deps, session, integrationId);
+  if (!existing || existing.vendor !== "veeam_vspc") return { status: "error", message: NOT_FOUND };
+
+  const parsed = vspcFormSchema.omit({ name: true }).safeParse(input);
+  if (!parsed.success) {
+    return {
+      status: "error",
+      message: "Check the highlighted fields.",
+      fieldErrors: fieldErrors(parsed.error),
+    };
+  }
+  if (!deps.limiter.take(session.tenantId)) return { status: "error", message: TOO_MANY };
+
+  const { serverUrl, apiKey } = parsed.data;
+  const credentials = new Secret({ serverUrl, apiKey });
+  const test = await runTest(deps, session, "veeam_vspc", credentials, integrationId);
+  if (test.outcome !== "ok") return { status: "error", message: `Not saved. ${test.message}` };
+
+  const updated = await deps.db.withTenant(session.tenantId, (context) =>
+    replaceIntegrationCredentials(context, deps.keyProvider, {
+      id: integrationId,
+      credentials,
+      credentialHint: vspcCredentialHint({ serverUrl, apiKey }),
+      actorUserId: session.userId,
+      ip: deps.ip ?? null,
+    }),
+  );
+  if (!updated) return { status: "error", message: NOT_FOUND };
+  return { status: "ok", message: "Connection details replaced. The next sync uses them." };
 }

@@ -31,8 +31,8 @@ export const vendors: readonly VendorInfo[] = [
   {
     id: "veeam_vspc",
     name: "Veeam Service Provider Console",
-    summary: "Companies, protected workloads and job sessions",
-    availability: "planned",
+    summary: "Companies, VMs in backup jobs, and computers with Veeam agents",
+    availability: "available",
   },
   {
     id: "mock",

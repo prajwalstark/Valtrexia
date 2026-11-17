@@ -109,7 +109,7 @@ describe("renderNotificationEmail: integrations and tests", () => {
     expect(rejected.text).toContain(
       "The last attempt said: The vendor rejected these credentials.",
     );
-    expect(rejected.text).toContain("until its keys are replaced");
+    expect(rejected.text).toContain("until its connection details are replaced");
 
     const outage = renderNotificationEmail(
       buildIntegrationHealthPayload({ ...base, state: "unhealthy", needsAction: false }),

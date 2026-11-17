@@ -17,6 +17,8 @@ export { Secret } from "./crypto/secret";
 export { createLogger, type CreateLoggerOptions, type Logger } from "./logging/logger";
 export { isSensitiveKey, redact, REDACTED, scrubString } from "./logging/redact";
 export {
+  createGuardedFetch,
+  type GuardedFetchOptions,
   isPublicAddress,
   OutboundFailedError,
   outboundPolicyFromEnv,

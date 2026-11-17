@@ -25,6 +25,8 @@ export async function integrationDeps(): Promise<IntegrationDeps> {
       logger,
       // A person is waiting: one retry, not the sync job's patient four.
       maxRetries: 1,
+      // A VSPC console's address comes from a person. Never relaxed in production.
+      outboundPolicy: outboundPolicyFromEnv(process.env),
       ...(dattoBaseUrl ? { dattoBaseUrl } : {}),
     },
     limiter: connectionTestLimiter,

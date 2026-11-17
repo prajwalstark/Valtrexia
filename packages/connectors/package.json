@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./datto/fixtures": "./src/datto/fixtures.ts"
+    "./datto/fixtures": "./src/datto/fixtures.ts",
+    "./vspc/fixtures": "./src/vspc/fixtures.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

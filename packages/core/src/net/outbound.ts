@@ -205,6 +205,35 @@ export async function resolvePublicAddresses(
   return addresses;
 }
 
+/**
+ * A DNS lookup for the socket that resolves once, refuses any non-public
+ * address, and hands the socket exactly the addresses it checked. An IP
+ * literal never reaches it; that was checked when the URL was parsed.
+ * `refusal()` says why a lookup was refused, once it has been.
+ */
+function pinnedLookup(
+  policy: OutboundPolicy,
+  resolver: Resolver | undefined,
+): { lookup: LookupFunction; refusal: () => OutboundRefusedError | undefined } {
+  let refused: OutboundRefusedError | undefined;
+  const lookup: LookupFunction = (hostname, lookupOptions, callback) => {
+    resolvePublicAddresses(hostname, policy, resolver).then(
+      (addresses) => {
+        if (typeof lookupOptions === "object" && lookupOptions.all) {
+          callback(null, addresses);
+        } else {
+          callback(null, addresses[0]!.address, addresses[0]!.family);
+        }
+      },
+      (error: unknown) => {
+        if (error instanceof OutboundRefusedError) refused = error;
+        callback(error as NodeJS.ErrnoException, "", 0);
+      },
+    );
+  };
+  return { lookup, refusal: () => refused };
+}
+
 export interface PostJsonOptions {
   headers?: Record<string, string>;
   /** The request body, already serialized. */
@@ -232,24 +261,7 @@ export async function postJson(raw: string, options: PostJsonOptions): Promise<{
   const url = parseOutboundUrl(raw, policy);
   const timeoutMs = options.timeoutMs ?? 10_000;
 
-  // Resolve once, check, and hand exactly these addresses to the socket. An
-  // IP literal never reaches the lookup; it was checked when the URL was parsed.
-  let refusal: OutboundRefusedError | undefined;
-  const lookup: LookupFunction = (hostname, lookupOptions, callback) => {
-    resolvePublicAddresses(hostname, policy, options.resolver).then(
-      (addresses) => {
-        if (typeof lookupOptions === "object" && lookupOptions.all) {
-          callback(null, addresses);
-        } else {
-          callback(null, addresses[0]!.address, addresses[0]!.family);
-        }
-      },
-      (error: unknown) => {
-        if (error instanceof OutboundRefusedError) refusal = error;
-        callback(error as NodeJS.ErrnoException, "", 0);
-      },
-    );
-  };
+  const { lookup, refusal } = pinnedLookup(policy, options.resolver);
 
   const send = url.protocol === "http:" ? httpRequest : httpsRequest;
   return new Promise((resolve, reject) => {
@@ -288,7 +300,7 @@ export async function postJson(raw: string, options: PostJsonOptions): Promise<{
 
     request.on("error", (error: NodeJS.ErrnoException) => {
       clearTimeout(timer);
-      if (refusal) reject(refusal);
+      if (refusal()) reject(refusal());
       else if (error instanceof OutboundFailedError) reject(error);
       else if (/CERT|SELF_SIGNED|ERR_TLS|UNABLE_TO_VERIFY/i.test(error.code ?? "")) {
         reject(new OutboundFailedError("tls"));
@@ -296,4 +308,109 @@ export async function postJson(raw: string, options: PostJsonOptions): Promise<{
     });
     request.end(options.body);
   });
+}
+
+export interface GuardedFetchOptions {
+  policy?: OutboundPolicy;
+  /** Replaces DNS. For tests. */
+  resolver?: Resolver;
+  /** Largest response body read. A larger one fails the request. Default 25 MB. */
+  maxResponseBytes?: number;
+}
+
+/**
+ * A `fetch` for reading from a server a tenant named, such as their own
+ * Veeam Service Provider Console. Same rules as `postJson`, in the shape the
+ * vendor HTTP client already takes:
+ *
+ *   - GET only: anything else is refused before a connection is made, so the
+ *     read-only guarantee holds here too;
+ *   - https only (unless the policy relaxes it for local development), every
+ *     resolved address public, the connection pinned to those addresses;
+ *   - redirects are returned, never followed;
+ *   - the body is read up to a limit, and the caller's abort signal is honoured.
+ *
+ * Refused destinations reject with `OutboundRefusedError`; connections that
+ * fail, time out or fail TLS verification reject with `OutboundFailedError`.
+ */
+export function createGuardedFetch(options: GuardedFetchOptions = {}): typeof fetch {
+  const policy = options.policy ?? {};
+  const maxBytes = options.maxResponseBytes ?? 25 * 1024 * 1024;
+
+  const guarded = (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const method = (
+      init?.method ?? (input instanceof Request ? input.method : "GET")
+    ).toUpperCase();
+    if (method !== "GET") {
+      return Promise.reject(
+        new Error("Only GET requests can be made to a tenant-supplied server."),
+      );
+    }
+    let url: URL;
+    try {
+      url = parseOutboundUrl(input instanceof Request ? input.url : String(input), policy);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    const headers: Record<string, string> = {};
+    new Headers(init?.headers).forEach((value, key) => {
+      headers[key] = value;
+    });
+    const { lookup, refusal } = pinnedLookup(policy, options.resolver);
+    const send = url.protocol === "http:" ? httpRequest : httpsRequest;
+    const signal = init?.signal ?? undefined;
+
+    return new Promise<Response>((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(signal.reason instanceof Error ? signal.reason : new OutboundFailedError("timeout"));
+        return;
+      }
+      const request = send(url, { method: "GET", agent: false, lookup, headers }, (response) => {
+        const chunks: Buffer[] = [];
+        let received = 0;
+        response.on("data", (chunk: Buffer) => {
+          received += chunk.length;
+          if (received > maxBytes) {
+            // Settle first: once a response has begun, destroying the request
+            // does not raise an error event that would settle it for us.
+            reject(new OutboundFailedError("connection"));
+            response.destroy();
+            request.destroy();
+            return;
+          }
+          chunks.push(chunk);
+        });
+        response.on("end", () => {
+          const responseHeaders = new Headers();
+          for (const [key, value] of Object.entries(response.headers)) {
+            if (value === undefined) continue;
+            for (const one of Array.isArray(value) ? value : [value])
+              responseHeaders.append(key, one);
+          }
+          const status = response.statusCode ?? 0;
+          // Statuses the Response constructor refuses are outside anything a server should send.
+          if (status < 200 || status > 599) {
+            reject(new OutboundFailedError("connection"));
+            return;
+          }
+          const body = [101, 204, 205, 304].includes(status) ? null : Buffer.concat(chunks);
+          resolve(new Response(body, { status, headers: responseHeaders }));
+        });
+        response.on("error", () => reject(new OutboundFailedError("connection")));
+      });
+      const onAbort = () => request.destroy(new OutboundFailedError("timeout"));
+      signal?.addEventListener("abort", onAbort, { once: true });
+      request.on("close", () => signal?.removeEventListener("abort", onAbort));
+      request.on("error", (error: NodeJS.ErrnoException) => {
+        const refused = refusal();
+        if (refused) reject(refused);
+        else if (error instanceof OutboundFailedError) reject(error);
+        else if (/CERT|SELF_SIGNED|ERR_TLS|UNABLE_TO_VERIFY/i.test(error.code ?? "")) {
+          reject(new OutboundFailedError("tls"));
+        } else reject(new OutboundFailedError("connection"));
+      });
+      request.end();
+    });
+  };
+  return guarded as typeof fetch;
 }

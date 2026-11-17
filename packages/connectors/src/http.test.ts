@@ -205,6 +205,32 @@ describe("http client: rate limiting (HTTP 429)", () => {
     expect(sleeps).toEqual([250, 500]);
   });
 
+  it("reads the wait from the body when there is no header, as Veeam sends it", async () => {
+    const { client, sleeps } = harness([
+      json({ errors: [{ type: "transport", code: 429, retryAfter: 25 }] }, { status: 429 }),
+      json({ retryAfter: 3 }, { status: 429 }),
+      json({ ok: 1 }),
+    ]);
+    await expect(client.getJson("jobs")).resolves.toEqual({ ok: 1 });
+    expect(sleeps).toEqual([25_000, 3000]);
+  });
+
+  it("prefers the header to the body, and ignores a body it cannot read", async () => {
+    const { client, sleeps } = harness([
+      json({ retryAfter: 40 }, { status: 429, headers: { "retry-after": "2" } }),
+      new Response("not json", { status: 429 }),
+      json({ retryAfter: "soon" }, { status: 429 }),
+      json({}),
+    ]);
+    await client.getJson("jobs");
+    expect(sleeps).toEqual([2000, 500, 1000]);
+  });
+
+  it("gives up when the body asks for longer than we will block", async () => {
+    const { client } = harness([json({ errors: [{ retryAfter: 600 }] }, { status: 429 })]);
+    await expect(client.getJson("jobs")).rejects.toMatchObject({ retryAfterMs: 600_000 });
+  });
+
   it("stops and reports the wait when the vendor asks for longer than we will block", async () => {
     const { client, calls, sleeps } = harness([status(429, { "retry-after": "900" })]);
     const error = await client.getJson("device").catch((e: unknown) => e);

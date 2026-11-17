@@ -129,7 +129,9 @@ describe("describeSync", () => {
       lastSyncError: "The vendor rejected these credentials. Check the keys and their permissions.",
     });
     expect(description.state).toBe("unhealthy");
-    expect(description.text).toContain("It will keep failing until the keys are replaced.");
+    expect(description.text).toContain(
+      "It will keep failing until its connection details are replaced.",
+    );
   });
 
   it("says when syncs have simply stopped", () => {
@@ -170,7 +172,7 @@ describe("describeIntegrationProblem", () => {
       needsAction: true,
       error: "The vendor rejected these credentials.",
     });
-    expect(describeIntegrationProblem(rejected, NOW, "UTC").action).toBe("Replace the keys");
+    expect(describeIntegrationProblem(rejected, NOW, "UTC").action).toBe("Update the connection");
   });
 
   it("is brief about a failure that is still being retried", () => {

@@ -3,6 +3,7 @@ import {
   ConnectorError,
   ConnectorUnavailableError,
   createConnector,
+  DestinationRefusedError,
   InvalidCredentialsShapeError,
   InvalidResponseError,
   NetworkError,
@@ -35,6 +36,7 @@ import {
   DecryptionError,
   type KeyProvider,
   type Logger,
+  type OutboundPolicy,
   type Secret,
 } from "@valtrexia/core/server";
 import {
@@ -65,6 +67,8 @@ export interface SyncDeps {
   fetch?: typeof fetch;
   /** Overrides Datto's API root. From server configuration only, never a request. */
   dattoBaseUrl?: string;
+  /** What a tenant-supplied server address may be. Strict unless set for local development. */
+  outboundPolicy?: OutboundPolicy;
   syncIntervalMinutes?: number;
   /** Replaces the connector registry. For tests. */
   connectorFactory?: (
@@ -179,6 +183,7 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
       now: () => now,
       ...(deps.fetch ? { fetch: deps.fetch } : {}),
       ...(deps.dattoBaseUrl ? { dattoBaseUrl: deps.dattoBaseUrl } : {}),
+      ...(deps.outboundPolicy ? { outboundPolicy: deps.outboundPolicy } : {}),
     };
     const connector = (deps.connectorFactory ?? createConnector)(
       started.integration.vendor,
@@ -676,7 +681,13 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
  */
 export function classifyFailure(error: unknown): SyncErrorKind {
   if (error instanceof AuthError) return "auth";
-  if (error instanceof InvalidCredentialsShapeError || error instanceof DecryptionError) {
+  // A refused destination is the saved connection details' fault, like a bad
+  // key: it will not fix itself, so it is reported as needing action at once.
+  if (
+    error instanceof InvalidCredentialsShapeError ||
+    error instanceof DecryptionError ||
+    error instanceof DestinationRefusedError
+  ) {
     return "credentials";
   }
   if (error instanceof RateLimitError) return "rate_limited";

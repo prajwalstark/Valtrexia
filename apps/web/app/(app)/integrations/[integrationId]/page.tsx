@@ -1,13 +1,16 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { DattoCredentialsForm } from "@/components/integrations/datto-credentials-form";
+import { VspcCredentialsForm } from "@/components/integrations/vspc-credentials-form";
 import { DisconnectForm } from "@/components/integrations/disconnect-form";
 import { IntegrationDetailView } from "@/components/integrations/integration-detail-view";
 import { TestConnection } from "@/components/integrations/test-connection";
 import {
   disconnectAction,
   replaceDattoAction,
+  replaceVspcAction,
   testNewDattoAction,
+  testNewVspcAction,
   testSavedAction,
 } from "@/lib/actions/integrations";
 import { requireTenant } from "@/lib/auth";
@@ -50,6 +53,13 @@ export default async function IntegrationPage({
             mode="replace"
             saveAction={replaceDattoAction.bind(null, integration.id)}
             testAction={testNewDattoAction}
+            cancelHref="/integrations"
+          />
+        ) : integration.vendor === "veeam_vspc" ? (
+          <VspcCredentialsForm
+            mode="replace"
+            saveAction={replaceVspcAction.bind(null, integration.id)}
+            testAction={testNewVspcAction}
             cancelHref="/integrations"
           />
         ) : undefined

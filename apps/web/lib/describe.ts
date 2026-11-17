@@ -120,7 +120,9 @@ export function describeSync(
         text: join(
           `Sync failing${since}${attempts}.`,
           reason,
-          health.needsAction ? "It will keep failing until the keys are replaced." : null,
+          health.needsAction
+            ? "It will keep failing until its connection details are replaced."
+            : null,
           last,
         ),
       };
@@ -168,6 +170,6 @@ export function describeIntegrationProblem(
   const duration = problem.since ? ` for ${elapsed(problem.since, now)}` : "";
   return {
     text: `${problem.name} has been failing to sync${duration}. ${problem.error ?? "The last sync did not complete."}${unconfirmed}`,
-    action: problem.needsAction ? "Replace the keys" : "View integration",
+    action: problem.needsAction ? "Update the connection" : "View integration",
   };
 }
