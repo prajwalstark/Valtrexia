@@ -8,7 +8,7 @@ Version 1 is **read-only**. It never starts, stops or changes a backup job.
 
 ## Status
 
-Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and tested. Phase 2 is under way, following [PLAN-PHASE-2.md](./PLAN-PHASE-2.md): steps 1 to 4 of 12 are done (continuous integration; handling of vendor data that stops arriving; the stale-backup rule; asset settings and mute). It is **not production-ready**. Three things have never been run against the real system they depend on, and several production requirements are not built.
+Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and tested. Phase 2 is under way, following [PLAN-PHASE-2.md](./PLAN-PHASE-2.md): steps 1 to 5 of 12 are done (continuous integration; handling of vendor data that stops arriving; the stale-backup rule; asset settings and mute; the incidents page, audit log and workspace settings). It is **not production-ready**. Three things have never been run against the real system they depend on, and several production requirements are not built.
 
 **What works, verified here:**
 
@@ -25,7 +25,7 @@ Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and test
 | Datto BCDR      | The connector has never called Datto. Its response shapes are assumptions; see [Datto BCDR](#datto-bcdr) for the list to check. |
 | 3D view         | Only run with software rendering, never on a graphics card.                                                                     |
 
-**What is not built:** the production key provider (KMS), the Unitrends and VSPC connectors, notifications, time zones other than UTC, and the items listed in [SECURITY.md](./SECURITY.md).
+**What is not built:** the production key provider (KMS), the Unitrends and VSPC connectors, notifications, and the items listed in [SECURITY.md](./SECURITY.md).
 
 ### Before production
 
@@ -178,7 +178,7 @@ Which one is shown:
 
 The decisions (which view, and where each client sits) are pure functions in `apps/web/lib/fleet-view.ts`.
 
-**Client page.** The client's open incidents, then its assets worst first. Each asset shows its status, when it last backed up, and a strip of the last 14 days: one square per UTC day, showing that day's _worst_ result, so one failure is never hidden behind later successes. An empty square is a day with no backup. Opening an asset lists its individual backups with the vendor's own status, screenshot verification and any message. Assets that are archived, paused or muted are listed last and dimmed.
+**Client page.** The client's open incidents, then its assets worst first. Each asset shows its status, when it last backed up, and a strip of the last 14 days: one square per day in the workspace's time zone, showing that day's _worst_ result, so one failure is never hidden behind later successes. An empty square is a day with no backup. Opening an asset lists its individual backups with the vendor's own status, screenshot verification and any message. Assets that are archived, paused or muted are listed last and dimmed.
 
 **Acknowledging an incident** records who is looking at it and when. It does not close the incident; only a completed backup does. Owners and technicians can both acknowledge.
 
@@ -204,9 +204,43 @@ How status is shown:
 
 - Every status has an icon and a word as well as a colour, and each day square has its own shape (cross, dot, ring, slash). Nothing depends on telling red from green.
 - The status colours were checked with a palette validator: each pair is distinguishable under simulated red-green colour blindness and in normal vision, and each has at least 3:1 contrast against the background.
-- Times are shown in UTC. A per-workspace time zone is not built yet.
+- Dates and times are shown in the workspace's time zone, set by an owner on the Settings page. See [Workspace settings](#workspace-settings).
 
 The vendor's raw payload and anything about credentials are never sent to the browser; the queries name the columns they return. The logic is in `apps/web/lib/dashboard-core.ts` and is tested against Postgres.
+
+## Incidents page
+
+Every incident in the workspace, across clients, in three views:
+
+| View            | Holds                                       | Order                      |
+| --------------- | ------------------------------------------- | -------------------------- |
+| Needs attention | Open, and nobody has acknowledged it        | Oldest first               |
+| Acknowledged    | Open, and someone has said they are looking | Oldest first               |
+| Closed          | Resolved                                    | Most recently closed first |
+
+Each view shows its count, and the list can be narrowed to one client, one type of incident, or both; the counts follow the filter. An incident can be acknowledged from the list. The asset's name links to its client page.
+
+Views, filters and pages are plain links and a plain form, so the page works without JavaScript and any view can be bookmarked or shared. Whatever a link says, a workspace sees only its own incidents: a client id from another workspace is treated as no filter at all. Lists are 50 to a page.
+
+## Audit log
+
+Owners can read every change made in the workspace on the Audit log page: when, who (or "System"), what in a sentence, the stored action name beneath it, and the IP address it came from. Entries can be narrowed to assets, incidents, integrations, people or workspace settings.
+
+- **The log is written by the code that makes each change, in the same transaction**, so a change and its record succeed or fail together.
+- **It cannot be edited or erased.** The application's database role may insert entries and read them, and nothing else; a test confirms an update and a delete are both refused by the database.
+- **It holds no credentials.** Entries name what changed, never a key or a vendor payload.
+- Something an entry is about that has since been removed is described as such ("an asset since removed") rather than left out. An action the page has no sentence for is shown by its stored name, so a new kind of entry is never hidden.
+- Technicians cannot open it. The link is hidden from them, and the page refuses them where the log is read, not in the menu.
+
+## Workspace settings
+
+Two settings apply to the whole workspace. Anyone can see them on the Settings page; owners can change them, and each change is audited.
+
+**Time zone.** Everything is stored in UTC. The time zone decides how dates and times are shown, and where one day ends and the next begins. That second part matters for an asset's 14-day strip: a backup at 23:30 in New York belongs to that evening, not to the next day in UTC. Days are counted on the calendar rather than in 24-hour steps, so a 23- or 25-hour day around a clock change is still one day. Changing the zone rewrites nothing.
+
+No date in the app can be shown without a time zone: the formatting functions require one and have no default. The zone is always passed to the formatter explicitly, never taken from the server or the browser, so both render the same text.
+
+**Grace period.** How long past its expected time a backup may be before it counts as missed, for every asset: 0 to 168 hours, 2 by default. Pages apply a new value at once; incidents follow from the next sync.
 
 ## Integrations
 

@@ -2,7 +2,7 @@ import { ChevronDown, ChevronLeft, ClockAlert } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { PageHeader } from "@/components/shell/page-header";
-import { HealthBadge, STATUS_META, StatusBadge } from "@/components/status/status";
+import { HealthBadge, INCIDENT_META, STATUS_META, StatusBadge } from "@/components/status/status";
 import {
   HISTORY_DAYS,
   type ClientAsset,
@@ -13,12 +13,6 @@ import { describeClient } from "@/lib/describe";
 import { count, elapsed, formatDate, formatDateTime, timeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { DayStrip, DayStripLegend } from "./day-strip";
-
-const INCIDENT_LABEL: Record<OpenIncident["type"], string> = {
-  failed: "Backup failed",
-  missed: "Backup missed",
-  stale: "SLA breached",
-};
 
 export function ClientDetailView({
   client,
@@ -64,10 +58,7 @@ export function ClientDetailView({
           </h2>
           <ul className="mt-4 divide-y divide-line border-y border-line">
             {client.openIncidents.map((incident) => {
-              const meta =
-                incident.type === "stale"
-                  ? { icon: ClockAlert, tone: "text-status-critical" }
-                  : STATUS_META[incident.type];
+              const meta = INCIDENT_META[incident.type];
               const Icon = meta.icon;
               return (
                 <li
@@ -77,8 +68,7 @@ export function ClientDetailView({
                   <p className="flex items-center gap-2">
                     <Icon aria-hidden="true" className={cn("size-4 shrink-0", meta.tone)} />
                     <span>
-                      <span className="font-medium">{INCIDENT_LABEL[incident.type]}</span> on{" "}
-                      {incident.assetName}
+                      <span className="font-medium">{meta.label}</span> on {incident.assetName}
                       <span className="text-subtle-foreground">
                         , open since {timeAgo(incident.openedAt, now, timeZone)}
                       </span>

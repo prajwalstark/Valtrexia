@@ -1,10 +1,11 @@
 "use client";
 
 import { MAX_GRACE_HOURS, MIN_GRACE_HOURS } from "@valtrexia/core";
-import { useActionState, useId } from "react";
+import { useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useFormAction } from "@/lib/use-form-action";
 import type { WorkspaceState } from "@/lib/workspace-core";
 import { cn } from "@/lib/utils";
 
@@ -23,18 +24,21 @@ export function WorkspaceSettingsForm({
   /** Every zone on offer, with its label already written by the server. */
   zones: readonly { value: string; label: string }[];
 }) {
-  const [state, submit, pending] = useActionState(action, { status: "idle" });
+  const [state, submit, pending] = useFormAction<WorkspaceState>(action, { status: "idle" });
+  const [zone, setZone] = useState(timeZone);
+  const [grace, setGrace] = useState(String(graceHours));
   const id = useId();
   const errors = state.status === "error" ? state.fieldErrors : undefined;
 
   return (
-    <form action={submit} noValidate className="max-w-xl">
+    <form onSubmit={submit} noValidate className="max-w-xl">
       <div>
         <Label htmlFor={`${id}-zone`}>Time zone</Label>
         <select
           id={`${id}-zone`}
           name="timeZone"
-          defaultValue={timeZone}
+          value={zone}
+          onChange={(event) => setZone(event.target.value)}
           className={cn(selectClass, "mt-2")}
           aria-invalid={errors?.timeZone ? true : undefined}
           aria-describedby={`${id}-zone-help${errors?.timeZone ? ` ${id}-zone-error` : ""}`}
@@ -67,7 +71,8 @@ export function WorkspaceSettingsForm({
             min={MIN_GRACE_HOURS}
             max={MAX_GRACE_HOURS}
             step={1}
-            defaultValue={graceHours}
+            value={grace}
+            onChange={(event) => setGrace(event.target.value)}
             className="w-28"
             aria-invalid={errors?.graceHours ? true : undefined}
             aria-describedby={`${id}-grace-help${errors?.graceHours ? ` ${id}-grace-error` : ""}`}

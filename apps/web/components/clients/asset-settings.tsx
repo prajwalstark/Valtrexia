@@ -7,13 +7,14 @@ import {
   MUTE_REASON_MAX_LENGTH,
   TECHNICIAN_MAX_MUTE_DAYS,
 } from "@valtrexia/core";
-import { useActionState, useId, useState, useTransition } from "react";
+import { useId, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { SettingsState } from "@/lib/asset-settings-core";
 import type { AssetMute } from "@/lib/dashboard-core";
 import { count, formatDate } from "@/lib/format";
+import { useFormAction } from "@/lib/use-form-action";
 import { cn } from "@/lib/utils";
 
 type FormAction = (previous: SettingsState, formData: FormData) => Promise<SettingsState>;
@@ -70,20 +71,23 @@ function MuteForm({
   /** True once something else has happened since, and the last result no longer describes the page. */
   hideOutcome?: boolean;
 }) {
-  const [state, submit, pending] = useActionState(action, IDLE);
+  const [state, submit, pending] = useFormAction(action, IDLE);
+  const [duration, setDuration] = useState("7");
+  const [reason, setReason] = useState("");
   const id = useId();
   const errors = state.status === "error" ? state.fieldErrors : undefined;
   const choices = MUTE_DAY_CHOICES.filter((days) => canManage || days <= TECHNICIAN_MAX_MUTE_DAYS);
 
   return (
-    <form action={submit} noValidate>
+    <form onSubmit={submit} noValidate>
       <div className="grid gap-x-3 gap-y-3 sm:grid-cols-[9.5rem_minmax(0,1fr)]">
         <div>
           <Label htmlFor={`${id}-duration`}>Mute for</Label>
           <select
             id={`${id}-duration`}
             name="duration"
-            defaultValue="7"
+            value={duration}
+            onChange={(event) => setDuration(event.target.value)}
             className={cn(selectClass, "mt-2")}
             aria-invalid={errors?.duration ? true : undefined}
             aria-describedby={errors?.duration ? `${id}-duration-error` : undefined}
@@ -101,6 +105,8 @@ function MuteForm({
           <Input
             id={`${id}-reason`}
             name="reason"
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
             className="mt-2"
             maxLength={MUTE_REASON_MAX_LENGTH}
             placeholder="For example: server being replaced this week"
@@ -176,10 +182,14 @@ function ExpectationsForm({
   submitLabel: string;
   allowBlank?: boolean;
 }) {
-  const [state, submit, pending] = useActionState(action, IDLE);
+  const [state, submit, pending] = useFormAction(action, IDLE);
+  const [values, setValues] = useState({
+    expectedFrequencyHours: frequency === undefined ? "" : String(frequency),
+    slaHours: sla === undefined ? "" : String(sla),
+  });
   const id = useId();
   const errors = state.status === "error" ? state.fieldErrors : undefined;
-  const field = (name: "expectedFrequencyHours" | "slaHours", label: string, value?: number) => (
+  const field = (name: "expectedFrequencyHours" | "slaHours", label: string) => (
     <div>
       <Label htmlFor={`${id}-${name}`}>{label}</Label>
       <div className="mt-2 flex items-center gap-2">
@@ -191,7 +201,10 @@ function ExpectationsForm({
           min={MIN_ASSET_HOURS}
           max={MAX_ASSET_HOURS}
           step={1}
-          defaultValue={value}
+          value={values[name]}
+          onChange={(event) =>
+            setValues((previous) => ({ ...previous, [name]: event.target.value }))
+          }
           placeholder={allowBlank ? "No change" : undefined}
           className="w-28"
           aria-invalid={errors?.[name] ? true : undefined}
@@ -204,10 +217,10 @@ function ExpectationsForm({
   );
 
   return (
-    <form action={submit} noValidate>
+    <form onSubmit={submit} noValidate>
       <div className="flex flex-wrap gap-x-8 gap-y-3">
-        {field("expectedFrequencyHours", "A backup is expected every", frequency)}
-        {field("slaHours", "Longest without a backup (SLA)", sla)}
+        {field("expectedFrequencyHours", "A backup is expected every")}
+        {field("slaHours", "Longest without a backup (SLA)")}
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
         <Button type="submit" variant="outline" size="sm" disabled={pending}>

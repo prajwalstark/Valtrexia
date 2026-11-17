@@ -19,8 +19,9 @@ export async function acknowledgeIncidentAction(
     incidentId,
   );
   // `clientId` only chooses which page to refresh. It grants nothing.
-  if (state.status === "ok" && /^[0-9a-f-]{36}$/i.test(clientId)) {
-    revalidatePath(`/clients/${clientId}`);
+  if (state.status === "ok") {
+    revalidatePath("/incidents");
+    if (/^[0-9a-f-]{36}$/i.test(clientId)) revalidatePath(`/clients/${clientId}`);
   }
   return state;
 }
