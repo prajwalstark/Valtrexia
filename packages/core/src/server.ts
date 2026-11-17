@@ -22,6 +22,7 @@ export {
   type KeyProvider,
 } from "./crypto/key-provider";
 export { Secret } from "./crypto/secret";
+export { assertProductionTransport } from "./net/transport";
 export { createLogger, type CreateLoggerOptions, type Logger } from "./logging/logger";
 export { isSensitiveKey, redact, REDACTED, scrubString } from "./logging/redact";
 export {

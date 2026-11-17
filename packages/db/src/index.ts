@@ -10,6 +10,7 @@ export {
   type DueNotificationBatch,
   type EncryptedRecordRef,
   type EncryptedRecordType,
+  type RetentionBatch,
   type TenantContext,
   type TenantTx,
   type TransactionOptions,

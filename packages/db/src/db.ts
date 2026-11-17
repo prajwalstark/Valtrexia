@@ -37,6 +37,12 @@ export interface DueIntegration {
   tenantId: string;
 }
 
+export interface RetentionBatch {
+  payloadsCleared: number;
+  resultsDeleted: number;
+  auditDeleted: number;
+}
+
 /** The kinds of record that hold an encrypted value. */
 export type EncryptedRecordType = "integration" | "notification_channel";
 
@@ -94,6 +100,19 @@ export interface Db {
     after?: Pick<EncryptedRecordRef, "tenantId" | "type" | "id"> | null;
     limit?: number;
   }): Promise<EncryptedRecordRef[]>;
+
+  /**
+   * One batch of retention across all tenants: empties raw payloads older
+   * than `payloadDays`, deletes results older than `resultDays` and audit
+   * entries older than `auditDays`. The database refuses periods shorter
+   * than 7, 30 and 90 days. Call again while any count equals `batchSize`.
+   */
+  applyRetention(input: {
+    payloadDays: number;
+    resultDays: number;
+    auditDays: number;
+    batchSize?: number;
+  }): Promise<RetentionBatch>;
 
   /** How many records of each type are wrapped under each key, across all tenants. */
   countEncryptedRecordsByKey(): Promise<
@@ -193,6 +212,24 @@ export function createDb({ url, maxConnections = 10 }: CreateDbOptions): Db {
         id: row.record_id,
         keyId: row.key_id,
       }));
+    },
+
+    async applyRetention({ payloadDays, resultDays, auditDays, batchSize = 5000 }) {
+      const rows = await prisma.$queryRaw<
+        { payloads_cleared: bigint; results_deleted: bigint; audit_deleted: bigint }[]
+      >`
+        SELECT payloads_cleared, results_deleted, audit_deleted
+        FROM apply_retention(
+          ${Math.floor(payloadDays)}::int, ${Math.floor(resultDays)}::int,
+          ${Math.floor(auditDays)}::int, ${Math.floor(batchSize)}::int
+        )
+      `;
+      const row = rows[0];
+      return {
+        payloadsCleared: Number(row?.payloads_cleared ?? 0),
+        resultsDeleted: Number(row?.results_deleted ?? 0),
+        auditDeleted: Number(row?.audit_deleted ?? 0),
+      };
     },
 
     async countEncryptedRecordsByKey() {

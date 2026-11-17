@@ -1,4 +1,5 @@
 import "server-only";
+import { assertProductionTransport } from "@valtrexia/core/server";
 import { getDb, type Db } from "@valtrexia/db";
 
 let checked: Promise<Db> | undefined;
@@ -12,6 +13,7 @@ let checked: Promise<Db> | undefined;
  */
 export function getSafeDb(): Promise<Db> {
   checked ??= (async () => {
+    assertProductionTransport(process.env, { database: true });
     const db = getDb();
     await db.assertSafeRole();
     return db;

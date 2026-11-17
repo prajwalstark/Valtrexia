@@ -327,6 +327,8 @@ model BackupResult {
 
   @@unique([assetId, vendorResultId])
   @@index([tenantId, assetId, startedAt(sort: Desc)])
+  /// For the retention job, which works across tenants by age.
+  @@index([startedAt])
   @@map("backup_results")
 }
 
@@ -376,6 +378,8 @@ model AuditLog {
   actor  User?  @relation(fields: [tenantId, actorUserId], references: [tenantId, id], onDelete: NoAction)
 
   @@index([tenantId, createdAt(sort: Desc)])
+  /// For the retention job, which works across tenants by age.
+  @@index([createdAt])
   @@map("audit_logs")
 }
 

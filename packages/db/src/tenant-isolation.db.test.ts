@@ -117,6 +117,7 @@ describe("catalog: every table is protected", () => {
       ORDER BY p.proname
     `);
     expect(result.rows.map((row) => row.proname)).toEqual([
+      "apply_retention",
       "count_encrypted_records_by_key",
       "list_due_integrations",
       "list_due_notification_batches",

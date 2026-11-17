@@ -417,16 +417,24 @@ The demo vendor is available only when `VALTREXIA_ENABLE_MOCK=true`, and never w
 - **Failures.** The HTTP layer retries transient vendor errors itself. A sync that still fails is recorded on the integration and tried again when it is next due, 15 minutes later, rather than in a tight loop. One failing integration does not hold up the others.
 - **Several workers.** Any number of worker processes can run. The tick is a single schedule held in Redis, not one per process.
 - **Shutdown.** On `SIGTERM` or `SIGINT` the worker stops taking new jobs, lets running syncs finish, then exits.
-- **Safety at startup.** It refuses to start if connected to Postgres as a privileged role, or with invalid configuration, and says which setting is wrong without printing its value.
+- **Safety at startup.** It refuses to start if connected to Postgres as a privileged role, or with invalid configuration, and says which setting is wrong without printing its value. In production it also refuses unencrypted connections: Postgres must use `sslmode=verify-full`, and Redis a `rediss://` URL with a password. The web app checks its database URL the same way.
+- **Maintenance.** Every six hours (and at startup) one worker applies retention, across all tenants, in batches.
 
 Finding what is due is the system's one cross-tenant read. It goes through a SQL function that returns ids only; each sync then runs inside its own tenant. A queued job carries two ids and nothing else: no names, no credentials.
 
-| Setting                  | Default | Meaning                                                                                  |
-| ------------------------ | ------- | ---------------------------------------------------------------------------------------- |
-| `SYNC_INTERVAL_MINUTES`  | 15      | How often each integration is synced. Also read by the web app; give both the same value |
-| `SYNC_CONCURRENCY`       | 5       | Integrations synced at the same time by one process                                      |
-| `SCHEDULER_TICK_SECONDS` | 60      | How often the scheduler looks for due integrations                                       |
-| `LOG_LEVEL`              | info    | Worker log verbosity                                                                     |
+| Setting                      | Default | Meaning                                                                                  |
+| ---------------------------- | ------- | ---------------------------------------------------------------------------------------- |
+| `SYNC_INTERVAL_MINUTES`      | 15      | How often each integration is synced. Also read by the web app; give both the same value |
+| `SYNC_CONCURRENCY`           | 5       | Integrations synced at the same time by one process                                      |
+| `SCHEDULER_TICK_SECONDS`     | 60      | How often the scheduler looks for due integrations                                       |
+| `LOG_LEVEL`                  | info    | Worker log verbosity                                                                     |
+| `RETENTION_RAW_PAYLOAD_DAYS` | 90      | Vendor payloads stored with results are emptied after this. Minimum 7                    |
+| `RETENTION_RESULT_DAYS`      | 395     | Backup results are deleted after this (13 months). Minimum 30                            |
+| `RETENTION_AUDIT_DAYS`       | 730     | Audit entries are deleted after this (24 months). Minimum 90                             |
+
+**Retention** runs through one SQL function (`apply_retention`), because the runtime role cannot delete audit entries and must not be able to. The function refuses periods below the minimums above, whatever the configuration says. An emptied payload leaves the normalized result in place: its status, times and message stay; only the vendor's own record goes.
+
+**No queue-level retries for syncs** (decision 9). A failed sync is tried again at its next turn, 15 minutes later. Retrying sooner mostly adds load to a vendor that is already struggling, and the HTTP client already retries transient errors and honours rate limits within a sync.
 
 ### Incidents
 

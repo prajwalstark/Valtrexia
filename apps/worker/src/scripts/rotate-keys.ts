@@ -10,7 +10,11 @@
  * and keep the old one readable before running it; see "Rotating the key"
  * in the README. Exits non-zero if anything is left to do.
  */
-import { createKeyProviderFromEnv, createLogger } from "@valtrexia/core/server";
+import {
+  assertProductionTransport,
+  createKeyProviderFromEnv,
+  createLogger,
+} from "@valtrexia/core/server";
 import { createDb } from "@valtrexia/db";
 import { rotateKeys } from "../keys/rotate";
 
@@ -28,6 +32,7 @@ async function main(): Promise<number> {
 
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error("DATABASE_URL is not set.");
+  assertProductionTransport(process.env, { database: true });
   const logger = createLogger({ name: "rotate-keys", level: process.env.LOG_LEVEL ?? "info" });
   const keyProvider = createKeyProviderFromEnv(process.env);
   const db = createDb({ url, maxConnections: 2 });

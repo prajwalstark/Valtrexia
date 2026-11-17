@@ -15,6 +15,9 @@ import {
 import {
   DELIVER_JOB,
   DELIVER_SCHEDULER_ID,
+  MAINTENANCE_JOB,
+  MAINTENANCE_QUEUE,
+  MAINTENANCE_SCHEDULER_ID,
   NOTIFICATION_QUEUE,
   parseSyncJob,
   QUEUE_PREFIX,
@@ -24,6 +27,9 @@ import {
   TICK_JOB,
   TICK_SCHEDULER_ID,
 } from "./queues";
+import type { RetentionPolicy } from "./config";
+import { runMaintenance, type MaintenanceResult } from "./maintenance/run";
+import { DEFAULT_RETENTION } from "./maintenance/retention";
 import { enqueueDueSyncs, type TickResult } from "./scheduler";
 import { IntegrationNotFoundError, syncIntegration, type SyncDeps } from "./sync/sync-integration";
 
@@ -43,6 +49,10 @@ export interface WorkerOptions {
   /** How email is sent, or null when this server has no email set up. */
   emailSender?: EmailSender | null;
   dattoBaseUrl?: string | undefined;
+  /** How long old data is kept. Default: decision 8's periods. */
+  retention?: RetentionPolicy;
+  /** How often maintenance runs. Default 6 hours. */
+  maintenanceEveryHours?: number;
   /** Redis key prefix. Tests use their own so they never see each other's jobs. */
   prefix?: string;
   /** For tests. */
@@ -56,6 +66,8 @@ export interface RunningWorker {
   tickNow(): Promise<TickResult>;
   /** Sends the notifications that are due now, without waiting for the timer. */
   deliverNow(): Promise<DeliveryResult[]>;
+  /** Runs maintenance (retention, tenant deletion) now, without waiting for the timer. */
+  maintainNow(): Promise<MaintenanceResult>;
   /** The sync queue, for inspection. */
   syncQueue: Queue;
   /** Stops taking new work, lets running syncs finish, and closes connections. */
@@ -81,6 +93,7 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
   const syncQueue = new Queue(SYNC_QUEUE, { connection, prefix });
   const schedulerQueue = new Queue(SCHEDULER_QUEUE, { connection, prefix });
   const notificationQueue = new Queue(NOTIFICATION_QUEUE, { connection, prefix });
+  const maintenanceQueue = new Queue(MAINTENANCE_QUEUE, { connection, prefix });
 
   const deliveryDeps: DeliveryDeps = {
     db,
@@ -92,6 +105,8 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
     ...(options.resolver ? { resolver: options.resolver } : {}),
   };
   const deliver = () => deliverDueNotifications(deliveryDeps);
+  const maintain = () =>
+    runMaintenance({ db, logger }, { retention: options.retention ?? DEFAULT_RETENTION });
 
   const tick = () =>
     enqueueDueSyncs({
@@ -154,10 +169,17 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
     { connection, prefix, concurrency: 1 },
   );
 
+  const maintenanceWorker = new Worker(MAINTENANCE_QUEUE, async () => maintain(), {
+    connection,
+    prefix,
+    concurrency: 1,
+  });
+
   for (const [name, worker] of [
     ["scheduler", schedulerWorker],
     ["sync", syncWorker],
     ["notifications", notificationWorker],
+    ["maintenance", maintenanceWorker],
   ] as const) {
     // Connection-level problems (Redis restarting, for example). Without a
     // listener an "error" event would crash the process.
@@ -165,6 +187,9 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
   }
   schedulerWorker.on("failed", (_job, error) =>
     logger.error({ err: error }, "scheduler tick failed"),
+  );
+  maintenanceWorker.on("failed", (_job, error) =>
+    logger.error({ err: error }, "maintenance failed; it runs again at its next time"),
   );
 
   // One schedule, stored in Redis. Starting a second worker process updates
@@ -182,7 +207,14 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
     { name: DELIVER_JOB, opts: { removeOnComplete: true, removeOnFail: 20 } },
   );
 
+  await maintenanceQueue.upsertJobScheduler(
+    MAINTENANCE_SCHEDULER_ID,
+    { every: (options.maintenanceEveryHours ?? 6) * 3_600_000 },
+    { name: MAINTENANCE_JOB, opts: { removeOnComplete: true, removeOnFail: 20 } },
+  );
+
   await Promise.all([
+    maintenanceWorker.waitUntilReady(),
     schedulerWorker.waitUntilReady(),
     syncWorker.waitUntilReady(),
     notificationWorker.waitUntilReady(),
@@ -199,13 +231,20 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
   return {
     tickNow: tick,
     deliverNow: deliver,
+    maintainNow: maintain,
     syncQueue,
     async close() {
       // Workers first: close() waits for a running sync to finish.
       await schedulerWorker.close();
       await notificationWorker.close();
+      await maintenanceWorker.close();
       await syncWorker.close();
-      await Promise.all([schedulerQueue.close(), syncQueue.close(), notificationQueue.close()]);
+      await Promise.all([
+        schedulerQueue.close(),
+        syncQueue.close(),
+        notificationQueue.close(),
+        maintenanceQueue.close(),
+      ]);
       logger.info("worker stopped");
     },
   };
