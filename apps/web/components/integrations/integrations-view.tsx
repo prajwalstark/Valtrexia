@@ -9,16 +9,19 @@ import { SyncStatus } from "./sync-status";
 
 /**
  * What saved credentials look like on screen: never more than the last four
- * characters of a key, and for a VSPC console, the host it is on.
+ * characters of a key or client ID, and for a VSPC console, the host it is on.
  */
 export function keyHint(vendor: VendorId, hint: string | null): string | null {
   if (!hint) return null;
-  return vendor === "datto_bcdr" ? `Public key ending ${hint}` : hint;
+  if (vendor === "datto_bcdr") return `Public key ending ${hint}`;
+  if (vendor === "kaseya_uniview") return `Client ID ending ${hint}`;
+  return hint;
 }
 
 /** Where to connect each vendor that can be connected. */
 const CONNECT_HREF: Partial<Record<VendorId, string>> = {
   datto_bcdr: "/integrations/connect/datto",
+  kaseya_uniview: "/integrations/connect/uniview",
   veeam_vspc: "/integrations/connect/vspc",
 };
 

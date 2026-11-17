@@ -345,10 +345,18 @@ describe("connector registry", () => {
     }
   });
 
-  it("reports kaseya_uniview as not available yet", () => {
-    expect(() => createConnector("kaseya_uniview", creds({}), { allowMock: true })).toThrow(
-      ConnectorUnavailableError,
+  it("builds a UniView connector from valid credentials, and refuses incomplete ones", () => {
+    const uniview = createConnector(
+      "kaseya_uniview",
+      creds({ clientId: "client-0123456789", clientSecret: "secret-0123456789abcdef" }),
+      { allowMock: false },
     );
+    expect(uniview.vendor).toBe("kaseya_uniview");
+    expect(() =>
+      createConnector("kaseya_uniview", creds({ clientId: "client-0123456789" }), {
+        allowMock: false,
+      }),
+    ).toThrow(InvalidCredentialsShapeError);
   });
 
   it("builds a VSPC connector from valid credentials, and refuses incomplete ones", () => {

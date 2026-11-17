@@ -4,6 +4,8 @@ import {
   createConnector,
   dattoCredentialHint,
   dattoCredentialsSchema,
+  univiewCredentialHint,
+  univiewCredentialsSchema,
   vspcCredentialHint,
   vspcCredentialsSchema,
   NetworkError,
@@ -52,7 +54,17 @@ export interface IntegrationDeps {
 }
 
 export type FieldErrors = Partial<
-  Record<"name" | "publicKey" | "secretKey" | "serverUrl" | "apiKey" | "confirm", string>
+  Record<
+    | "name"
+    | "publicKey"
+    | "secretKey"
+    | "serverUrl"
+    | "apiKey"
+    | "clientId"
+    | "clientSecret"
+    | "confirm",
+    string
+  >
 >;
 
 export type ActionState =
@@ -84,7 +96,9 @@ function fieldErrors(error: z.ZodError): FieldErrors {
       field === "publicKey" ||
       field === "secretKey" ||
       field === "serverUrl" ||
-      field === "apiKey"
+      field === "apiKey" ||
+      field === "clientId" ||
+      field === "clientSecret"
     ) {
       out[field] ??= issue.code === "invalid_type" ? "This field is required." : issue.message;
     }
@@ -93,6 +107,13 @@ function fieldErrors(error: z.ZodError): FieldErrors {
 }
 
 type TestOutcome = "ok" | "rejected" | "rate_limited" | "unreachable" | "vendor_error" | "failed";
+
+/** How the person connecting a vendor would describe what they typed in. */
+function credentialsNoun(vendor: VendorId): string {
+  if (vendor === "veeam_vspc") return "this API key";
+  if (vendor === "kaseya_uniview") return "this client ID and secret";
+  return "these keys";
+}
 
 /** Turns a connection-test failure into words for a technician, and a label for the audit log. */
 function describeTestFailure(
@@ -106,7 +127,9 @@ function describeTestFailure(
       message:
         vendor === "veeam_vspc"
           ? `${name} rejected this API key. Check that it was copied in full, is enabled, and has the REST API scope.`
-          : `${name} rejected these keys. Check that both were copied in full and that the key pair is active.`,
+          : vendor === "kaseya_uniview"
+            ? `${name} rejected this client ID and secret. Check that both were copied in full and that the API client has not been deleted.`
+            : `${name} rejected these keys. Check that both were copied in full and that the key pair is active.`,
     };
   }
   if (error instanceof RateLimitError) {
@@ -146,7 +169,7 @@ async function runTest(
     await createConnector(vendor, credentials, deps.connectorDeps).testConnection();
     result = {
       outcome: "ok",
-      message: `Connected. ${getVendor(vendor).name} accepted ${vendor === "veeam_vspc" ? "this API key" : "these keys"}.`,
+      message: `Connected. ${getVendor(vendor).name} accepted ${credentialsNoun(vendor)}.`,
     };
   } catch (error) {
     result = describeTestFailure(vendor, error);
@@ -497,6 +520,139 @@ export async function replaceVspcCredentials(
       id: integrationId,
       credentials,
       credentialHint: vspcCredentialHint({ serverUrl, apiKey }),
+      actorUserId: session.userId,
+      ip: deps.ip ?? null,
+    }),
+  );
+  if (!updated) return { status: "error", message: NOT_FOUND };
+  return { status: "ok", message: "Connection details replaced. The next sync uses them." };
+}
+
+const univiewFormSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .max(60, "Use 60 characters or fewer.")
+    .transform((value) => value || getVendor("kaseya_uniview").name),
+  clientId: univiewCredentialsSchema.shape.clientId,
+  clientSecret: univiewCredentialsSchema.shape.clientSecret,
+});
+
+/** Checks a UniView client ID and secret without saving them. */
+export async function testNewUniviewCredentials(
+  deps: IntegrationDeps,
+  session: TenantSession,
+  input: unknown,
+): Promise<ActionState> {
+  if (session.role !== "owner") return { status: "error", message: OWNERS_ONLY };
+  const parsed = univiewFormSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      status: "error",
+      message: "Check the highlighted fields.",
+      fieldErrors: fieldErrors(parsed.error),
+    };
+  }
+  if (!deps.limiter.take(session.tenantId)) return { status: "error", message: TOO_MANY };
+  const { clientId, clientSecret } = parsed.data;
+  const result = await runTest(
+    deps,
+    session,
+    "kaseya_uniview",
+    new Secret({ clientId, clientSecret }),
+    null,
+  );
+  return result.outcome === "ok"
+    ? { status: "ok", message: result.message }
+    : { status: "error", message: result.message };
+}
+
+/**
+ * Saves a UniView account as a new integration, after a connection test
+ * passes. The client ID and secret are stored encrypted together; only the
+ * client ID's last four characters are kept in the clear, as a reminder.
+ */
+export async function connectUniview(
+  deps: IntegrationDeps,
+  session: TenantSession,
+  input: unknown,
+): Promise<ActionState> {
+  if (session.role !== "owner") return { status: "error", message: OWNERS_ONLY };
+  const parsed = univiewFormSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      status: "error",
+      message: "Check the highlighted fields.",
+      fieldErrors: fieldErrors(parsed.error),
+    };
+  }
+  const { name, clientId, clientSecret } = parsed.data;
+  const taken = await deps.db.withTenant(session.tenantId, (context) =>
+    integrationNameExists(context, name),
+  );
+  if (taken) {
+    return {
+      status: "error",
+      message: "Check the highlighted fields.",
+      fieldErrors: { name: "An integration with this name already exists. Choose another." },
+    };
+  }
+  if (!deps.limiter.take(session.tenantId)) return { status: "error", message: TOO_MANY };
+
+  const credentials = new Secret({ clientId, clientSecret });
+  const test = await runTest(deps, session, "kaseya_uniview", credentials, null);
+  if (test.outcome !== "ok") return { status: "error", message: `Not saved. ${test.message}` };
+
+  const integration = await deps.db.withTenant(session.tenantId, (context) =>
+    createIntegration(context, deps.keyProvider, {
+      vendor: "kaseya_uniview",
+      name,
+      credentials,
+      credentialHint: univiewCredentialHint({ clientId, clientSecret }),
+      actorUserId: session.userId,
+      ip: deps.ip ?? null,
+    }),
+  );
+  return {
+    status: "ok",
+    message: `${name} is connected. The first sync starts within a few minutes.`,
+    integrationId: integration.id,
+  };
+}
+
+/** Replaces a UniView integration's client ID and secret, after testing the new ones. */
+export async function replaceUniviewCredentials(
+  deps: IntegrationDeps,
+  session: TenantSession,
+  integrationId: string,
+  input: unknown,
+): Promise<ActionState> {
+  if (session.role !== "owner") return { status: "error", message: OWNERS_ONLY };
+  const existing = await getIntegrationFor(deps, session, integrationId);
+  if (!existing || existing.vendor !== "kaseya_uniview") {
+    return { status: "error", message: NOT_FOUND };
+  }
+
+  const parsed = univiewFormSchema.omit({ name: true }).safeParse(input);
+  if (!parsed.success) {
+    return {
+      status: "error",
+      message: "Check the highlighted fields.",
+      fieldErrors: fieldErrors(parsed.error),
+    };
+  }
+  if (!deps.limiter.take(session.tenantId)) return { status: "error", message: TOO_MANY };
+
+  const { clientId, clientSecret } = parsed.data;
+  const credentials = new Secret({ clientId, clientSecret });
+  const test = await runTest(deps, session, "kaseya_uniview", credentials, integrationId);
+  if (test.outcome !== "ok") return { status: "error", message: `Not saved. ${test.message}` };
+
+  const updated = await deps.db.withTenant(session.tenantId, (context) =>
+    replaceIntegrationCredentials(context, deps.keyProvider, {
+      id: integrationId,
+      credentials,
+      credentialHint: univiewCredentialHint({ clientId, clientSecret }),
       actorUserId: session.userId,
       ip: deps.ip ?? null,
     }),

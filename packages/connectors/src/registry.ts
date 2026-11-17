@@ -11,6 +11,8 @@ import { dattoCredentialsSchema } from "./datto/credentials";
 import { ConnectorUnavailableError, InvalidCredentialsShapeError } from "./errors";
 import { MockConnector, mockCredentialsSchema } from "./mock/connector";
 import type { Connector } from "./types";
+import { UniviewConnector } from "./uniview/connector";
+import { univiewCredentialsSchema } from "./uniview/credentials";
 import { VspcConnector } from "./vspc/connector";
 import { vspcCredentialsSchema } from "./vspc/credentials";
 
@@ -90,8 +92,17 @@ export function createConnector(
         ...(deps.maxRetries !== undefined ? { maxRetries: deps.maxRetries } : {}),
       });
     }
-    case "kaseya_uniview":
-      throw new ConnectorUnavailableError("This vendor is planned but not available yet.");
+    case "kaseya_uniview": {
+      const parsed = univiewCredentialsSchema.safeParse(credentials.expose());
+      if (!parsed.success) throw new InvalidCredentialsShapeError();
+      // UniView's hosts are fixed in the connector, like Datto's: nothing a
+      // person types decides where these requests go.
+      return new UniviewConnector(parsed.data, {
+        ...(deps.fetch ? { fetch: deps.fetch } : {}),
+        ...(deps.logger ? { logger: deps.logger } : {}),
+        ...(deps.maxRetries !== undefined ? { maxRetries: deps.maxRetries } : {}),
+      });
+    }
     default: {
       const unreachable: never = vendor;
       throw new ConnectorUnavailableError(`Unknown vendor: ${String(unreachable)}`);

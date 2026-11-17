@@ -376,6 +376,11 @@ describe("vspc normalization", () => {
       { status: "Exploded" },
       { lastSession: { backupStatus: "Brand new" } },
       { lastSession: null, status: 7 },
+      // Names on every object's prototype.
+      { status: "toString" },
+      { status: "constructor" },
+      { lastSession: { backupStatus: "__proto__" } },
+      { lastSession: { backupStatus: "hasOwnProperty" } },
     ]) {
       expect(normalizeVspcStatus(raw)).toBe("unknown");
     }

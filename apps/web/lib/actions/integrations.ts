@@ -5,11 +5,14 @@ import { redirect } from "next/navigation";
 import { requireTenant } from "@/lib/auth";
 import {
   connectDatto,
+  connectUniview,
   connectVspc,
   disconnectIntegration,
   replaceDattoCredentials,
+  replaceUniviewCredentials,
   replaceVspcCredentials,
   testNewDattoCredentials,
+  testNewUniviewCredentials,
   testNewVspcCredentials,
   testSavedIntegration,
   type ActionState,
@@ -131,6 +134,51 @@ export async function replaceVspcAction(
     session,
     integrationId,
     vspcFields(formData),
+  );
+  if (state.status === "ok") revalidatePath(`/integrations/${integrationId}`);
+  return state;
+}
+
+function univiewFields(formData: FormData) {
+  return {
+    name: formData.get("name") ?? "",
+    clientId: formData.get("clientId"),
+    clientSecret: formData.get("clientSecret"),
+  };
+}
+
+export async function testNewUniviewAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const session = await requireTenant();
+  return testNewUniviewCredentials(await integrationDeps(), session, univiewFields(formData));
+}
+
+export async function connectUniviewAction(
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const session = await requireTenant();
+  const state = await connectUniview(await integrationDeps(), session, univiewFields(formData));
+  if (state.status === "ok" && state.integrationId) {
+    revalidatePath("/integrations");
+    redirect(`/integrations/${state.integrationId}?connected=1`);
+  }
+  return state;
+}
+
+export async function replaceUniviewAction(
+  integrationId: string,
+  _previous: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const session = await requireTenant();
+  const state = await replaceUniviewCredentials(
+    await integrationDeps(),
+    session,
+    integrationId,
+    univiewFields(formData),
   );
   if (state.status === "ok") revalidatePath(`/integrations/${integrationId}`);
   return state;

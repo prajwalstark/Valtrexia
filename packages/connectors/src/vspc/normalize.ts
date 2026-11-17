@@ -3,26 +3,27 @@ import type { NormalizedStatus } from "../types";
 /**
  * Veeam's status values, from the specification, onto ours. Both lists are
  * marked extensible by Veeam; anything not listed is "unknown", never a guess.
+ * Maps, not object literals, so a value such as "toString" finds nothing.
  */
 
 /** `lastSession.backupStatus` of a VM in a backup job: Unknown, Running, Success, Warning, Failed. */
-const VM_SESSION: Record<string, NormalizedStatus> = {
-  Success: "success",
-  Warning: "warning",
-  Failed: "failed",
-  Running: "running",
-};
+const VM_SESSION = new Map<string, NormalizedStatus>([
+  ["Success", "success"],
+  ["Warning", "warning"],
+  ["Failed", "failed"],
+  ["Running", "running"],
+]);
 
 /** `status` of a backup agent job: Unknown, None, Success, Warning, Failed, Starting, Running, Stopping. */
-const AGENT_JOB: Record<string, NormalizedStatus> = {
-  Success: "success",
-  Warning: "warning",
-  Failed: "failed",
-  Starting: "running",
-  Running: "running",
+const AGENT_JOB = new Map<string, NormalizedStatus>([
+  ["Success", "success"],
+  ["Warning", "warning"],
+  ["Failed", "failed"],
+  ["Starting", "running"],
+  ["Running", "running"],
   // Being stopped by someone: the outcome is not known until it has stopped.
-  Stopping: "running",
-};
+  ["Stopping", "running"],
+]);
 
 /**
  * The status of one stored result. A VM result's record is a backup job
@@ -34,9 +35,9 @@ export function normalizeVspcStatus(raw: unknown): NormalizedStatus {
   const record = raw as { lastSession?: unknown; status?: unknown };
   if (record.lastSession && typeof record.lastSession === "object") {
     const value = (record.lastSession as { backupStatus?: unknown }).backupStatus;
-    return (typeof value === "string" && VM_SESSION[value]) || "unknown";
+    return (typeof value === "string" && VM_SESSION.get(value)) || "unknown";
   }
-  return (typeof record.status === "string" && AGENT_JOB[record.status]) || "unknown";
+  return (typeof record.status === "string" && AGENT_JOB.get(record.status)) || "unknown";
 }
 
 /**

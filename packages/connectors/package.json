@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./datto/fixtures": "./src/datto/fixtures.ts",
+    "./uniview/fixtures": "./src/uniview/fixtures.ts",
     "./vspc/fixtures": "./src/vspc/fixtures.ts"
   },
   "scripts": {

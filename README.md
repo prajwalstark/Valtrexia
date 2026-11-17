@@ -8,7 +8,7 @@ Version 1 is **read-only**. It never starts, stops or changes a backup job.
 
 ## Status
 
-Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and tested. Phase 2 is under way, following [PLAN-PHASE-2.md](./PLAN-PHASE-2.md): steps 1 to 8 of 12 are done (continuous integration; handling of vendor data that stops arriving; the stale-backup rule; asset settings and mute; the incidents page, audit log and workspace settings; the notification outbox and signed webhooks; the notifications page and email channels, short of a real email provider; the Veeam Service Provider Console connector). It is **not production-ready**. Three things have never been run against the real system they depend on, and several production requirements are not built.
+Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and tested. Phase 2 is under way, following [PLAN-PHASE-2.md](./PLAN-PHASE-2.md): steps 1 to 9 of 12 are done (continuous integration; handling of vendor data that stops arriving; the stale-backup rule; asset settings and mute; the incidents page, audit log and workspace settings; the notification outbox and signed webhooks; the notifications page and email channels, short of a real email provider; the Veeam Service Provider Console connector; the Kaseya UniView (Unitrends) connector). It is **not production-ready**. Three things have never been run against the real system they depend on, and several production requirements are not built.
 
 **What works, verified here:**
 
@@ -24,9 +24,10 @@ Phase 1 is complete: all twelve steps in [PLAN.md](./PLAN.md) are built and test
 | Signed-in pages | Because of the above, the pages were checked through a temporary preview route with seeded data, not behind a real session.                                      |
 | Datto BCDR      | The connector has never called Datto. Its response shapes are assumptions; see [Datto BCDR](#datto-bcdr) for the list to check.                                  |
 | Veeam VSPC      | Built from Veeam's published OpenAPI specification, but never run against a real console. See [Veeam Service Provider Console](#veeam-service-provider-console). |
+| Kaseya UniView  | Built from Kaseya's published OpenAPI specification, but never run against a real account. See [Kaseya UniView (Unitrends)](#kaseya-uniview-unitrends).          |
 | 3D view         | Only run with software rendering, never on a graphics card.                                                                                                      |
 
-**What is not built:** the production key provider (KMS), the Unitrends connector, sending email through a real provider (the provider is not chosen yet; see [Email](#email)), and the items listed in [SECURITY.md](./SECURITY.md).
+**What is not built:** the production key provider (KMS), sending email through a real provider (the provider is not chosen yet; see [Email](#email)), and the items listed in [SECURITY.md](./SECURITY.md).
 
 ### Before production
 
@@ -251,6 +252,8 @@ Owners connect vendors on the Integrations page. Technicians can see what is con
 
 **Connecting Veeam Service Provider Console.** Enter the console's address and an API key. The same "Test connection" and "Save and connect" apply. The address is checked before anything is sent to it; see [Veeam Service Provider Console](#veeam-service-provider-console).
 
+**Connecting Kaseya UniView (Unitrends).** Enter the client ID and client secret of an API client created in the UniView Portal under API Access. The same "Test connection" and "Save and connect" apply; the test gets a token and reads one customer. A saved UniView integration shows the last four characters of its client ID.
+
 **What happens to the keys.**
 
 - They are validated, tested, encrypted (see [Credentials and logs](#credentials-and-logs)) and stored. Nothing the server sends back to the browser contains a key, a ciphertext or anything derived from the secret key.
@@ -282,6 +285,8 @@ interface Connector {
 ```
 
 It is read-only by construction: there is no method that starts, stops or changes a backup job, and the shared HTTP client (`createHttpClient`) can only issue `GET`. That client also handles retries with exponential backoff and jitter, `429` with `Retry-After`, timeouts and a concurrency limit; refuses any request that would leave the vendor's base URL; and logs paths and status codes but never headers or bodies.
+
+The one request a connector makes outside that client is UniView's OAuth token request, a `POST` to a fixed address that only exchanges the client ID and secret for an access token; see [Kaseya UniView (Unitrends)](#kaseya-uniview-unitrends).
 
 Each result keeps the vendor's own record as `rawPayload`. `normalizeStatus` takes that record and maps it to a normalized status, returning `unknown` for anything it does not recognize.
 
@@ -358,6 +363,37 @@ Every request asks for only the fields it uses (VSPC's `select`). That also keep
 **Not covered yet:** replication, backup copy, file share, object storage, public cloud and Microsoft 365 jobs, and agents managed by a backup server rather than by the console. Their machines are not listed, so nothing is wrongly reported about them.
 
 **To check against a real console:** that `select` is honoured on every collection; that an assigned job's `mappedOrganizationUid` is the company, and an unassigned one's `organizationUid` is the provider; that `infrastructure/backupAgents/jobs` lists Linux and Mac agent jobs as well as Windows (its description says Windows only, its schema says all three); that timestamps carry an offset; how a never-run session's times appear; and VSPC's default throttling limits.
+
+### Kaseya UniView (Unitrends)
+
+Built from Kaseya's published OpenAPI specification for the UniView public API (`public_api-v1`, served at `https://public-api.backup.net`) and its help page on API access. **It has never been run against a real UniView account.** A stand-in in `packages/connectors/src/uniview/fixtures.ts`, built to the specification, is what the tests use.
+
+**Signing in.** UniView uses the OAuth 2.0 client credentials flow. The connector posts `grant_type=client_credentials` to `https://login.backup.net/connect/token`, with the client ID and secret as HTTP Basic auth, and sends the access token it gets back as `Authorization: Bearer` on every read. That token request is **the one request any connector makes that is not a `GET`**: it goes to one fixed address, carries one form field, follows no redirect, and changes nothing. The data itself is read only through the shared GET-only HTTP client. One token is fetched per sync and kept in memory for that sync; it is never stored or logged. Both hosts are fixed in the code; nothing a person types decides where these requests go.
+
+**What is read.**
+
+| Request                             | Becomes                                                                        |
+| ----------------------------------- | ------------------------------------------------------------------------------ |
+| `GET /v1/customers`                 | Clients                                                                        |
+| `GET /v1/appliances`                | The name of the Unitrends appliance protecting each asset, shown as its device |
+| `GET /v1/assets`                    | Assets, keyed by UniView's asset `key`                                         |
+| `GET /v1/backups?start_time_from=…` | Results: one per backup, keyed by its type and start time                      |
+
+Lists are paged with `page_number` and `page_size` (50, the documented default), in a fixed order, until a page comes back short. UniView keeps a history of backups and filters it by start time, so, as with Datto, a first sync reaches back 14 days.
+
+| UniView says                | Normalized |
+| --------------------------- | ---------- |
+| `Successful`                | `success`  |
+| `Warning`                   | `warning`  |
+| `Failed`                    | `failed`   |
+| `InProgress`                | `running`  |
+| `Unknown`, or anything else | `unknown`  |
+
+A failed replication to the backup's target does not change the backup's own status; it is noted in the result's message.
+
+UniView does not report backup schedules, or whether an asset is paused or retired, so every UniView asset starts with the default expected frequency of 24 hours. Set the real one, or mute an asset, on its client page.
+
+**To check against a real account:** that a token request with a bad secret is answered with HTTP 400 or 401 (either is treated as rejected keys); that `start_time_from` accepts an ISO 8601 timestamp in UTC; that a backup's `start_time` stays the same while it runs and after it completes (it is part of the result's key); that timestamps carry an offset (one without is read as UTC); and Kaseya's rate limits, which are not published. The connector keeps to two requests at a time and honours `429`.
 
 ### Demo vendor
 

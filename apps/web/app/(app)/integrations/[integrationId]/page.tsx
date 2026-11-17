@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { DattoCredentialsForm } from "@/components/integrations/datto-credentials-form";
+import { UniviewCredentialsForm } from "@/components/integrations/uniview-credentials-form";
 import { VspcCredentialsForm } from "@/components/integrations/vspc-credentials-form";
 import { DisconnectForm } from "@/components/integrations/disconnect-form";
 import { IntegrationDetailView } from "@/components/integrations/integration-detail-view";
@@ -8,8 +9,10 @@ import { TestConnection } from "@/components/integrations/test-connection";
 import {
   disconnectAction,
   replaceDattoAction,
+  replaceUniviewAction,
   replaceVspcAction,
   testNewDattoAction,
+  testNewUniviewAction,
   testNewVspcAction,
   testSavedAction,
 } from "@/lib/actions/integrations";
@@ -60,6 +63,13 @@ export default async function IntegrationPage({
             mode="replace"
             saveAction={replaceVspcAction.bind(null, integration.id)}
             testAction={testNewVspcAction}
+            cancelHref="/integrations"
+          />
+        ) : integration.vendor === "kaseya_uniview" ? (
+          <UniviewCredentialsForm
+            mode="replace"
+            saveAction={replaceUniviewAction.bind(null, integration.id)}
+            testAction={testNewUniviewAction}
             cancelHref="/integrations"
           />
         ) : undefined
