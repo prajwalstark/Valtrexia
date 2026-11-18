@@ -24,6 +24,9 @@ export const integrationSummarySelect = {
   lastSyncStartedAt: true,
   syncStatus: true,
   lastSyncError: true,
+  lastSyncErrorKind: true,
+  consecutiveFailures: true,
+  failingSince: true,
   createdAt: true,
 } satisfies Prisma.IntegrationSelect;
 
@@ -196,6 +199,11 @@ export async function replaceIntegrationCredentials(
       credentialHint: input.credentialHint ?? null,
       // Clear the old failure and let the scheduler pick it up now.
       lastSyncError: null,
+      lastSyncErrorKind: null,
+      // The new credentials passed a connection test before being saved, so
+      // the run of failures the old ones caused is over.
+      consecutiveFailures: 0,
+      failingSince: null,
       lastSyncStartedAt: null,
       syncStatus: existing.lastSyncAt ? "ok" : "never",
     },

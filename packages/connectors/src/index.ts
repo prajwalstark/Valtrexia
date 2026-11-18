@@ -15,6 +15,7 @@ export {
   AuthError,
   ConnectorError,
   ConnectorUnavailableError,
+  DestinationRefusedError,
   InvalidCredentialsShapeError,
   InvalidResponseError,
   NetworkError,
@@ -38,3 +39,18 @@ export {
 } from "./mock/connector";
 export { createConnector, isMockAllowed, type ConnectorDeps } from "./registry";
 export type { Connector, NormalizedStatus, VendorAsset, VendorClient, VendorResult } from "./types";
+export { UNIVIEW_API_BASE_URL, UniviewConnector } from "./uniview/connector";
+export {
+  univiewCredentialHint,
+  univiewCredentialsSchema,
+  type UniviewCredentials,
+} from "./uniview/credentials";
+export { UNIVIEW_TOKEN_URL } from "./uniview/token";
+export { VspcConnector } from "./vspc/connector";
+export {
+  normalizeServerUrl as normalizeVspcServerUrl,
+  vspcCredentialHint,
+  vspcCredentialsSchema,
+  type VspcCredentials,
+} from "./vspc/credentials";
+export { VSPC_CLIENT_VERSION } from "./vspc/client";

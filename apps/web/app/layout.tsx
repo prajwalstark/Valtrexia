@@ -2,6 +2,7 @@ import { ClerkProvider } from "@clerk/nextjs";
 import { brand, brandLine } from "@valtrexia/core";
 import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
+import { connection } from "next/server";
 import type { ReactNode } from "react";
 import { clerkAppearance } from "@/lib/clerk-appearance";
 import "./globals.css";
@@ -30,9 +31,15 @@ export const viewport: Viewport = {
   themeColor: "#0e1630",
 };
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+export default async function RootLayout({ children }: { children: ReactNode }) {
+  // Every page is rendered per request: the Content-Security-Policy's nonce
+  // is new each time, and a page built ahead of time could not carry it, so
+  // its scripts would be blocked (lib/csp.ts).
+  await connection();
   return (
     <ClerkProvider
+      // Puts the request's CSP nonce on Clerk's scripts (see lib/csp.ts).
+      dynamic
       appearance={clerkAppearance}
       signInUrl="/sign-in"
       signUpUrl="/sign-up"

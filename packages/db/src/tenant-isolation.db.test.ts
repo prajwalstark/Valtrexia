@@ -6,6 +6,8 @@ import {
   PG,
   pgCode,
   seedTenant,
+  NO_DELETE_TABLES,
+  NO_UPDATE_TABLES,
   TENANT_TABLES,
   type SeededTenant,
 } from "../test/fixtures";
@@ -57,8 +59,11 @@ describe("catalog: every table is protected", () => {
     const result = await owner.query<{ tablename: string }>(`
       SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename
     `);
+    // tenant_deletions records workspaces that no longer exist: the
+    // operator's, not any tenant's. The runtime role has no privileges on it
+    // (offboarding.db.test.ts).
     expect(result.rows.map((row) => row.tablename)).toEqual(
-      [...TENANT_TABLES, "tenants", "_prisma_migrations"].sort(),
+      [...TENANT_TABLES, "tenants", "tenant_deletions", "_prisma_migrations"].sort(),
     );
   });
 
@@ -115,8 +120,13 @@ describe("catalog: every table is protected", () => {
       ORDER BY p.proname
     `);
     expect(result.rows.map((row) => row.proname)).toEqual([
+      "apply_retention",
+      "count_encrypted_records_by_key",
       "list_due_integrations",
+      "list_due_notification_batches",
+      "list_encrypted_records",
       "provision_tenant",
+      "purge_due_tenants",
       "resolve_tenant_id",
     ]);
     for (const row of result.rows) {
@@ -165,7 +175,10 @@ describe("runtime role", () => {
         ('audit_logs', 'UPDATE'), ('audit_logs', 'DELETE'), ('audit_logs', 'TRUNCATE'),
         ('tenants', 'INSERT'), ('tenants', 'DELETE'), ('tenants', 'UPDATE'),
         ('_prisma_migrations', 'SELECT'),
-        ('clients', 'TRUNCATE'), ('backup_results', 'TRUNCATE')
+        ('clients', 'TRUNCATE'), ('backup_results', 'TRUNCATE'),
+        ('notification_batches', 'DELETE'), ('notification_batches', 'TRUNCATE'),
+        ('notification_deliveries', 'UPDATE'), ('notification_deliveries', 'DELETE'),
+        ('notification_channels', 'TRUNCATE')
       ) AS checks(t, p)
     `);
     for (const row of result.rows) {
@@ -200,11 +213,11 @@ describe.each(TENANT_TABLES)("isolation: %s", (table) => {
   });
 
   it("cannot update the other tenant's row", async () => {
-    // audit_logs is append-only, so the attempt is refused outright.
+    // Where the role may not update at all, the attempt is refused outright.
     const attempt = asTenant(app, a.tenantId, (client) =>
       client.query(`UPDATE ${table} SET tenant_id = tenant_id WHERE id = $1`, [b.rows[table]]),
     );
-    if (table === "audit_logs") {
+    if (NO_UPDATE_TABLES.includes(table)) {
       await expect(attempt).rejects.toSatisfy((e) => pgCode(e) === PG.insufficientPrivilege);
     } else {
       expect((await attempt).rowCount).toBe(0);
@@ -215,7 +228,7 @@ describe.each(TENANT_TABLES)("isolation: %s", (table) => {
     const attempt = asTenant(app, a.tenantId, (client) =>
       client.query(`DELETE FROM ${table} WHERE id = $1`, [b.rows[table]]),
     );
-    if (table === "audit_logs") {
+    if (NO_DELETE_TABLES.includes(table)) {
       await expect(attempt).rejects.toSatisfy((e) => pgCode(e) === PG.insufficientPrivilege);
     } else {
       expect((await attempt).rowCount).toBe(0);
@@ -253,12 +266,18 @@ describe.each(TENANT_TABLES)("isolation: %s", (table) => {
     await expect(attempt).rejects.toThrow(RLS_VIOLATION);
   });
 
-  it.skipIf(table === "audit_logs")("cannot move its own row to the other tenant", async () => {
-    const attempt = asTenant(app, a.tenantId, (client) =>
-      client.query(`UPDATE ${table} SET tenant_id = $2 WHERE id = $1`, [a.rows[table], b.tenantId]),
-    );
-    await expect(attempt).rejects.toThrow(RLS_VIOLATION);
-  });
+  it.skipIf(NO_UPDATE_TABLES.includes(table))(
+    "cannot move its own row to the other tenant",
+    async () => {
+      const attempt = asTenant(app, a.tenantId, (client) =>
+        client.query(`UPDATE ${table} SET tenant_id = $2 WHERE id = $1`, [
+          a.rows[table],
+          b.tenantId,
+        ]),
+      );
+      await expect(attempt).rejects.toThrow(RLS_VIOLATION);
+    },
+  );
 });
 
 describe("isolation: tenants table", () => {
@@ -356,6 +375,82 @@ describe("cross-tenant references", () => {
       ),
     );
     await expect(attempt).rejects.toSatisfy((e) => pgCode(e) === PG.foreignKeyViolation);
+  });
+
+  it("a notification batch cannot be queued for the other tenant's channel", async () => {
+    const attempt = asTenant(app, a.tenantId, (client) =>
+      client.query(
+        `INSERT INTO notification_batches (tenant_id, channel_id, kind, payload)
+         VALUES ($1, $2, 'test', '{}')`,
+        [a.tenantId, b.rows.notification_channels],
+      ),
+    );
+    await expect(attempt).rejects.toSatisfy((e) => pgCode(e) === PG.foreignKeyViolation);
+  });
+
+  it("a delivery cannot name the other tenant's incident, channel or batch", async () => {
+    const mine = {
+      channel: a.rows.notification_channels,
+      incident: a.rows.incidents,
+      batch: a.rows.notification_batches,
+    };
+    for (const foreign of [
+      { ...mine, incident: b.rows.incidents },
+      { ...mine, channel: b.rows.notification_channels },
+      { ...mine, batch: b.rows.notification_batches },
+    ]) {
+      const attempt = asTenant(app, a.tenantId, (client) =>
+        client.query(
+          `INSERT INTO notification_deliveries (tenant_id, channel_id, incident_id, event, batch_id)
+           VALUES ($1, $2, $3, 'closed', $4)`,
+          [a.tenantId, foreign.channel, foreign.incident, foreign.batch],
+        ),
+      );
+      await expect(attempt).rejects.toSatisfy((e) => pgCode(e) === PG.foreignKeyViolation);
+    }
+  });
+
+  it("a channel is told about one event of one incident at most once", async () => {
+    // The seed already recorded "opened" for this incident on this channel.
+    const attempt = asTenant(app, a.tenantId, (client) =>
+      client.query(
+        `INSERT INTO notification_deliveries (tenant_id, channel_id, incident_id, event, batch_id)
+         VALUES ($1, $2, $3, 'opened', $4)`,
+        [a.tenantId, a.rows.notification_channels, a.rows.incidents, a.rows.notification_batches],
+      ),
+    );
+    await expect(attempt).rejects.toSatisfy((e) => pgCode(e) === PG.uniqueViolation);
+  });
+
+  it("due batches are found across tenants as ids only", async () => {
+    const due = await asTenant(app, null, (client) =>
+      client.query<Record<string, string>>("SELECT * FROM list_due_notification_batches(1000)"),
+    );
+    const rows = due.rows.filter((row) =>
+      [a.rows.notification_batches, b.rows.notification_batches].includes(row.batch_id!),
+    );
+    expect(rows).toHaveLength(2);
+    expect(Object.keys(rows[0]!).sort()).toEqual(["batch_id", "tenant_id"]);
+  });
+
+  it("encrypted records are listed across tenants as ids and key ids only", async () => {
+    const listed = await asTenant(app, null, (client) =>
+      client.query<Record<string, string>>(
+        "SELECT * FROM list_encrypted_records('no-such-key', NULL, NULL, NULL, 1000)",
+      ),
+    );
+    const ours = listed.rows.filter((row) => [a.tenantId, b.tenantId].includes(row.tenant_id!));
+    expect(ours.length).toBeGreaterThanOrEqual(2);
+    expect(Object.keys(ours[0]!).sort()).toEqual([
+      "key_id",
+      "record_id",
+      "record_type",
+      "tenant_id",
+    ]);
+    const counted = await asTenant(app, null, (client) =>
+      client.query<Record<string, string>>("SELECT * FROM count_encrypted_records_by_key()"),
+    );
+    expect(Object.keys(counted.rows[0]!).sort()).toEqual(["key_id", "record_type", "records"]);
   });
 });
 

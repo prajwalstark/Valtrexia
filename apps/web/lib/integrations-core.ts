@@ -4,13 +4,23 @@ import {
   createConnector,
   dattoCredentialHint,
   dattoCredentialsSchema,
+  univiewCredentialHint,
+  univiewCredentialsSchema,
+  vspcCredentialHint,
+  vspcCredentialsSchema,
   NetworkError,
   RateLimitError,
   VendorError,
   type ConnectorDeps,
 } from "@valtrexia/connectors";
 import { getVendor, type VendorId } from "@valtrexia/core";
-import { DecryptionError, Secret, type KeyProvider, type Logger } from "@valtrexia/core/server";
+import {
+  DecryptionError,
+  KeyServiceUnavailableError,
+  Secret,
+  type KeyProvider,
+  type Logger,
+} from "@valtrexia/core/server";
 import {
   createIntegration,
   deleteIntegration,
@@ -24,7 +34,7 @@ import {
   type IntegrationSummary,
 } from "@valtrexia/db";
 import { z } from "zod";
-import type { RateLimiter } from "./rate-limit";
+import { RateLimiterUnavailableError, type RateLimiter } from "./rate-limit";
 import type { TenantSession } from "./session-core";
 
 /**
@@ -49,7 +59,19 @@ export interface IntegrationDeps {
   ip?: string | null;
 }
 
-export type FieldErrors = Partial<Record<"name" | "publicKey" | "secretKey" | "confirm", string>>;
+export type FieldErrors = Partial<
+  Record<
+    | "name"
+    | "publicKey"
+    | "secretKey"
+    | "serverUrl"
+    | "apiKey"
+    | "clientId"
+    | "clientSecret"
+    | "confirm",
+    string
+  >
+>;
 
 export type ActionState =
   | { status: "idle" }
@@ -59,6 +81,48 @@ export type ActionState =
 const OWNERS_ONLY = "Only workspace owners can manage integrations.";
 const NOT_FOUND = "That integration no longer exists.";
 const TOO_MANY = "Too many connection tests. Wait a minute and try again.";
+/**
+ * Records a connection test against the tenant's limit. Returns the state to
+ * show when it may not go ahead: over the limit, or the limit could not be
+ * checked (a test is refused then, never let through unlimited).
+ */
+async function overLimit(
+  deps: Pick<IntegrationDeps, "limiter" | "logger">,
+  session: TenantSession,
+): Promise<ActionState | null> {
+  try {
+    return (await deps.limiter.take(session.tenantId))
+      ? null
+      : { status: "error", message: TOO_MANY };
+  } catch (error) {
+    if (!(error instanceof RateLimiterUnavailableError)) throw error;
+    deps.logger.error({ err: error }, "rate limiter unavailable; connection test refused");
+    return {
+      status: "error",
+      message: "Connection tests are unavailable for a moment. Try again shortly.",
+    };
+  }
+}
+
+const KEY_SERVICE_DOWN_MESSAGE =
+  "The encryption key service could not be reached, so nothing was saved. Try again shortly.";
+
+/** What a save returns instead of a value when the key service could not encrypt it. */
+const KEY_SERVICE_DOWN = Symbol("key service down");
+
+/**
+ * Waits for a save. A key service outage becomes a value the caller turns
+ * into a message, rather than an error page: nothing was written, and the
+ * same form can simply be sent again.
+ */
+async function unlessKeyServiceDown<T>(work: Promise<T>): Promise<T | typeof KEY_SERVICE_DOWN> {
+  try {
+    return await work;
+  } catch (error) {
+    if (error instanceof KeyServiceUnavailableError) return KEY_SERVICE_DOWN;
+    throw error;
+  }
+}
 
 const dattoFormSchema = z.object({
   name: z
@@ -75,7 +139,15 @@ function fieldErrors(error: z.ZodError): FieldErrors {
   const out: FieldErrors = {};
   for (const issue of error.issues) {
     const field = issue.path[0];
-    if (field === "name" || field === "publicKey" || field === "secretKey") {
+    if (
+      field === "name" ||
+      field === "publicKey" ||
+      field === "secretKey" ||
+      field === "serverUrl" ||
+      field === "apiKey" ||
+      field === "clientId" ||
+      field === "clientSecret"
+    ) {
       out[field] ??= issue.code === "invalid_type" ? "This field is required." : issue.message;
     }
   }
@@ -83,6 +155,13 @@ function fieldErrors(error: z.ZodError): FieldErrors {
 }
 
 type TestOutcome = "ok" | "rejected" | "rate_limited" | "unreachable" | "vendor_error" | "failed";
+
+/** How the person connecting a vendor would describe what they typed in. */
+function credentialsNoun(vendor: VendorId): string {
+  if (vendor === "veeam_vspc") return "this API key";
+  if (vendor === "kaseya_uniview") return "this client ID and secret";
+  return "these keys";
+}
 
 /** Turns a connection-test failure into words for a technician, and a label for the audit log. */
 function describeTestFailure(
@@ -93,7 +172,12 @@ function describeTestFailure(
   if (error instanceof AuthError) {
     return {
       outcome: "rejected",
-      message: `${name} rejected these keys. Check that both were copied in full and that the key pair is active.`,
+      message:
+        vendor === "veeam_vspc"
+          ? `${name} rejected this API key. Check that it was copied in full, is enabled, and has the REST API scope.`
+          : vendor === "kaseya_uniview"
+            ? `${name} rejected this client ID and secret. Check that both were copied in full and that the API client has not been deleted.`
+            : `${name} rejected these keys. Check that both were copied in full and that the key pair is active.`,
     };
   }
   if (error instanceof RateLimitError) {
@@ -117,6 +201,13 @@ function describeTestFailure(
       message: "The saved keys could not be read. Replace them with a new key pair.",
     };
   }
+  if (error instanceof KeyServiceUnavailableError) {
+    return {
+      outcome: "failed",
+      message:
+        "The saved keys could not be read just now: the encryption key service could not be reached. Try again shortly.",
+    };
+  }
   if (error instanceof ConnectorError) return { outcome: "failed", message: error.message };
   return { outcome: "failed", message: "The connection test failed unexpectedly. Try again." };
 }
@@ -133,7 +224,7 @@ async function runTest(
     await createConnector(vendor, credentials, deps.connectorDeps).testConnection();
     result = {
       outcome: "ok",
-      message: `Connected. ${getVendor(vendor).name} accepted these keys.`,
+      message: `Connected. ${getVendor(vendor).name} accepted ${credentialsNoun(vendor)}.`,
     };
   } catch (error) {
     result = describeTestFailure(vendor, error);
@@ -188,7 +279,8 @@ export async function testNewDattoCredentials(
       fieldErrors: fieldErrors(parsed.error),
     };
   }
-  if (!deps.limiter.take(session.tenantId)) return { status: "error", message: TOO_MANY };
+  const limited = await overLimit(deps, session);
+  if (limited) return limited;
 
   const { publicKey, secretKey } = parsed.data;
   const result = await runTest(
@@ -234,22 +326,27 @@ export async function connectDatto(
       fieldErrors: { name: "An integration with this name already exists. Choose another." },
     };
   }
-  if (!deps.limiter.take(session.tenantId)) return { status: "error", message: TOO_MANY };
+  const limited = await overLimit(deps, session);
+  if (limited) return limited;
 
   const credentials = new Secret({ publicKey, secretKey });
   const test = await runTest(deps, session, "datto_bcdr", credentials, null);
   if (test.outcome !== "ok") return { status: "error", message: `Not saved. ${test.message}` };
 
-  const integration = await deps.db.withTenant(session.tenantId, (context) =>
-    createIntegration(context, deps.keyProvider, {
-      vendor: "datto_bcdr",
-      name,
-      credentials,
-      credentialHint: dattoCredentialHint(publicKey),
-      actorUserId: session.userId,
-      ip: deps.ip ?? null,
-    }),
+  const integration = await unlessKeyServiceDown(
+    deps.db.withTenant(session.tenantId, (context) =>
+      createIntegration(context, deps.keyProvider, {
+        vendor: "datto_bcdr",
+        name,
+        credentials,
+        credentialHint: dattoCredentialHint(publicKey),
+        actorUserId: session.userId,
+        ip: deps.ip ?? null,
+      }),
+    ),
   );
+  if (integration === KEY_SERVICE_DOWN)
+    return { status: "error", message: KEY_SERVICE_DOWN_MESSAGE };
   return {
     status: "ok",
     message: `${name} is connected. The first sync starts within a few minutes.`,
@@ -265,7 +362,8 @@ export async function testSavedIntegration(
 ): Promise<ActionState> {
   if (session.role !== "owner") return { status: "error", message: OWNERS_ONLY };
   if (!z.uuid().safeParse(integrationId).success) return { status: "error", message: NOT_FOUND };
-  if (!deps.limiter.take(session.tenantId)) return { status: "error", message: TOO_MANY };
+  const limited = await overLimit(deps, session);
+  if (limited) return limited;
 
   let loaded;
   try {
@@ -304,22 +402,26 @@ export async function replaceDattoCredentials(
       fieldErrors: fieldErrors(parsed.error),
     };
   }
-  if (!deps.limiter.take(session.tenantId)) return { status: "error", message: TOO_MANY };
+  const limited = await overLimit(deps, session);
+  if (limited) return limited;
 
   const { publicKey, secretKey } = parsed.data;
   const credentials = new Secret({ publicKey, secretKey });
   const test = await runTest(deps, session, "datto_bcdr", credentials, integrationId);
   if (test.outcome !== "ok") return { status: "error", message: `Not saved. ${test.message}` };
 
-  const updated = await deps.db.withTenant(session.tenantId, (context) =>
-    replaceIntegrationCredentials(context, deps.keyProvider, {
-      id: integrationId,
-      credentials,
-      credentialHint: dattoCredentialHint(publicKey),
-      actorUserId: session.userId,
-      ip: deps.ip ?? null,
-    }),
+  const updated = await unlessKeyServiceDown(
+    deps.db.withTenant(session.tenantId, (context) =>
+      replaceIntegrationCredentials(context, deps.keyProvider, {
+        id: integrationId,
+        credentials,
+        credentialHint: dattoCredentialHint(publicKey),
+        actorUserId: session.userId,
+        ip: deps.ip ?? null,
+      }),
+    ),
   );
+  if (updated === KEY_SERVICE_DOWN) return { status: "error", message: KEY_SERVICE_DOWN_MESSAGE };
   if (!updated) return { status: "error", message: NOT_FOUND };
   return { status: "ok", message: "Keys replaced. The next sync uses the new key pair." };
 }
@@ -359,4 +461,288 @@ export async function disconnectIntegration(
     status: "ok",
     message: `${removed.name} was disconnected and ${removed.assetsRemoved} assets were removed.`,
   };
+}
+
+const vspcFormSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .max(60, "Use 60 characters or fewer.")
+    .transform((value) => value || getVendor("veeam_vspc").name),
+  serverUrl: vspcCredentialsSchema.shape.serverUrl,
+  apiKey: vspcCredentialsSchema.shape.apiKey,
+});
+
+/** Checks a VSPC address and API key without saving them. */
+export async function testNewVspcCredentials(
+  deps: IntegrationDeps,
+  session: TenantSession,
+  input: unknown,
+): Promise<ActionState> {
+  if (session.role !== "owner") return { status: "error", message: OWNERS_ONLY };
+  const parsed = vspcFormSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      status: "error",
+      message: "Check the highlighted fields.",
+      fieldErrors: fieldErrors(parsed.error),
+    };
+  }
+  const limited = await overLimit(deps, session);
+  if (limited) return limited;
+  const { serverUrl, apiKey } = parsed.data;
+  const result = await runTest(
+    deps,
+    session,
+    "veeam_vspc",
+    new Secret({ serverUrl, apiKey }),
+    null,
+  );
+  return result.outcome === "ok"
+    ? { status: "ok", message: result.message }
+    : { status: "error", message: result.message };
+}
+
+/**
+ * Saves a VSPC console as a new integration, after a connection test passes.
+ * The address and the key are stored encrypted together; only the host and
+ * the key's last four characters are kept in the clear, as a reminder.
+ */
+export async function connectVspc(
+  deps: IntegrationDeps,
+  session: TenantSession,
+  input: unknown,
+): Promise<ActionState> {
+  if (session.role !== "owner") return { status: "error", message: OWNERS_ONLY };
+  const parsed = vspcFormSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      status: "error",
+      message: "Check the highlighted fields.",
+      fieldErrors: fieldErrors(parsed.error),
+    };
+  }
+  const { name, serverUrl, apiKey } = parsed.data;
+  const taken = await deps.db.withTenant(session.tenantId, (context) =>
+    integrationNameExists(context, name),
+  );
+  if (taken) {
+    return {
+      status: "error",
+      message: "Check the highlighted fields.",
+      fieldErrors: { name: "An integration with this name already exists. Choose another." },
+    };
+  }
+  const limited = await overLimit(deps, session);
+  if (limited) return limited;
+
+  const credentials = new Secret({ serverUrl, apiKey });
+  const test = await runTest(deps, session, "veeam_vspc", credentials, null);
+  if (test.outcome !== "ok") return { status: "error", message: `Not saved. ${test.message}` };
+
+  const integration = await unlessKeyServiceDown(
+    deps.db.withTenant(session.tenantId, (context) =>
+      createIntegration(context, deps.keyProvider, {
+        vendor: "veeam_vspc",
+        name,
+        credentials,
+        credentialHint: vspcCredentialHint({ serverUrl, apiKey }),
+        actorUserId: session.userId,
+        ip: deps.ip ?? null,
+      }),
+    ),
+  );
+  if (integration === KEY_SERVICE_DOWN)
+    return { status: "error", message: KEY_SERVICE_DOWN_MESSAGE };
+  return {
+    status: "ok",
+    message: `${name} is connected. The first sync starts within a few minutes.`,
+    integrationId: integration.id,
+  };
+}
+
+/** Replaces a VSPC integration's address and key, after testing the new ones. */
+export async function replaceVspcCredentials(
+  deps: IntegrationDeps,
+  session: TenantSession,
+  integrationId: string,
+  input: unknown,
+): Promise<ActionState> {
+  if (session.role !== "owner") return { status: "error", message: OWNERS_ONLY };
+  const existing = await getIntegrationFor(deps, session, integrationId);
+  if (!existing || existing.vendor !== "veeam_vspc") return { status: "error", message: NOT_FOUND };
+
+  const parsed = vspcFormSchema.omit({ name: true }).safeParse(input);
+  if (!parsed.success) {
+    return {
+      status: "error",
+      message: "Check the highlighted fields.",
+      fieldErrors: fieldErrors(parsed.error),
+    };
+  }
+  const limited = await overLimit(deps, session);
+  if (limited) return limited;
+
+  const { serverUrl, apiKey } = parsed.data;
+  const credentials = new Secret({ serverUrl, apiKey });
+  const test = await runTest(deps, session, "veeam_vspc", credentials, integrationId);
+  if (test.outcome !== "ok") return { status: "error", message: `Not saved. ${test.message}` };
+
+  const updated = await unlessKeyServiceDown(
+    deps.db.withTenant(session.tenantId, (context) =>
+      replaceIntegrationCredentials(context, deps.keyProvider, {
+        id: integrationId,
+        credentials,
+        credentialHint: vspcCredentialHint({ serverUrl, apiKey }),
+        actorUserId: session.userId,
+        ip: deps.ip ?? null,
+      }),
+    ),
+  );
+  if (updated === KEY_SERVICE_DOWN) return { status: "error", message: KEY_SERVICE_DOWN_MESSAGE };
+  if (!updated) return { status: "error", message: NOT_FOUND };
+  return { status: "ok", message: "Connection details replaced. The next sync uses them." };
+}
+
+const univiewFormSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .max(60, "Use 60 characters or fewer.")
+    .transform((value) => value || getVendor("kaseya_uniview").name),
+  clientId: univiewCredentialsSchema.shape.clientId,
+  clientSecret: univiewCredentialsSchema.shape.clientSecret,
+});
+
+/** Checks a UniView client ID and secret without saving them. */
+export async function testNewUniviewCredentials(
+  deps: IntegrationDeps,
+  session: TenantSession,
+  input: unknown,
+): Promise<ActionState> {
+  if (session.role !== "owner") return { status: "error", message: OWNERS_ONLY };
+  const parsed = univiewFormSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      status: "error",
+      message: "Check the highlighted fields.",
+      fieldErrors: fieldErrors(parsed.error),
+    };
+  }
+  const limited = await overLimit(deps, session);
+  if (limited) return limited;
+  const { clientId, clientSecret } = parsed.data;
+  const result = await runTest(
+    deps,
+    session,
+    "kaseya_uniview",
+    new Secret({ clientId, clientSecret }),
+    null,
+  );
+  return result.outcome === "ok"
+    ? { status: "ok", message: result.message }
+    : { status: "error", message: result.message };
+}
+
+/**
+ * Saves a UniView account as a new integration, after a connection test
+ * passes. The client ID and secret are stored encrypted together; only the
+ * client ID's last four characters are kept in the clear, as a reminder.
+ */
+export async function connectUniview(
+  deps: IntegrationDeps,
+  session: TenantSession,
+  input: unknown,
+): Promise<ActionState> {
+  if (session.role !== "owner") return { status: "error", message: OWNERS_ONLY };
+  const parsed = univiewFormSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      status: "error",
+      message: "Check the highlighted fields.",
+      fieldErrors: fieldErrors(parsed.error),
+    };
+  }
+  const { name, clientId, clientSecret } = parsed.data;
+  const taken = await deps.db.withTenant(session.tenantId, (context) =>
+    integrationNameExists(context, name),
+  );
+  if (taken) {
+    return {
+      status: "error",
+      message: "Check the highlighted fields.",
+      fieldErrors: { name: "An integration with this name already exists. Choose another." },
+    };
+  }
+  const limited = await overLimit(deps, session);
+  if (limited) return limited;
+
+  const credentials = new Secret({ clientId, clientSecret });
+  const test = await runTest(deps, session, "kaseya_uniview", credentials, null);
+  if (test.outcome !== "ok") return { status: "error", message: `Not saved. ${test.message}` };
+
+  const integration = await unlessKeyServiceDown(
+    deps.db.withTenant(session.tenantId, (context) =>
+      createIntegration(context, deps.keyProvider, {
+        vendor: "kaseya_uniview",
+        name,
+        credentials,
+        credentialHint: univiewCredentialHint({ clientId, clientSecret }),
+        actorUserId: session.userId,
+        ip: deps.ip ?? null,
+      }),
+    ),
+  );
+  if (integration === KEY_SERVICE_DOWN)
+    return { status: "error", message: KEY_SERVICE_DOWN_MESSAGE };
+  return {
+    status: "ok",
+    message: `${name} is connected. The first sync starts within a few minutes.`,
+    integrationId: integration.id,
+  };
+}
+
+/** Replaces a UniView integration's client ID and secret, after testing the new ones. */
+export async function replaceUniviewCredentials(
+  deps: IntegrationDeps,
+  session: TenantSession,
+  integrationId: string,
+  input: unknown,
+): Promise<ActionState> {
+  if (session.role !== "owner") return { status: "error", message: OWNERS_ONLY };
+  const existing = await getIntegrationFor(deps, session, integrationId);
+  if (!existing || existing.vendor !== "kaseya_uniview") {
+    return { status: "error", message: NOT_FOUND };
+  }
+
+  const parsed = univiewFormSchema.omit({ name: true }).safeParse(input);
+  if (!parsed.success) {
+    return {
+      status: "error",
+      message: "Check the highlighted fields.",
+      fieldErrors: fieldErrors(parsed.error),
+    };
+  }
+  const limited = await overLimit(deps, session);
+  if (limited) return limited;
+
+  const { clientId, clientSecret } = parsed.data;
+  const credentials = new Secret({ clientId, clientSecret });
+  const test = await runTest(deps, session, "kaseya_uniview", credentials, integrationId);
+  if (test.outcome !== "ok") return { status: "error", message: `Not saved. ${test.message}` };
+
+  const updated = await unlessKeyServiceDown(
+    deps.db.withTenant(session.tenantId, (context) =>
+      replaceIntegrationCredentials(context, deps.keyProvider, {
+        id: integrationId,
+        credentials,
+        credentialHint: univiewCredentialHint({ clientId, clientSecret }),
+        actorUserId: session.userId,
+        ip: deps.ip ?? null,
+      }),
+    ),
+  );
+  if (updated === KEY_SERVICE_DOWN) return { status: "error", message: KEY_SERVICE_DOWN_MESSAGE };
+  if (!updated) return { status: "error", message: NOT_FOUND };
+  return { status: "ok", message: "Connection details replaced. The next sync uses them." };
 }

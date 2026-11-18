@@ -6,13 +6,21 @@ import { navItems } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
 
 /** Primary navigation. Vertical in the side rail, horizontal in the mobile bar. */
-export function AppNav({ orientation }: { orientation: "vertical" | "horizontal" }) {
+export function AppNav({
+  orientation,
+  isOwner,
+}: {
+  orientation: "vertical" | "horizontal";
+  /** Hides the links to owner-only pages from everyone else. It protects nothing by itself. */
+  isOwner: boolean;
+}) {
   const pathname = usePathname();
+  const items = navItems.filter((item) => isOwner || !item.ownerOnly);
 
   return (
     <nav aria-label="Primary">
       <ul className={cn("flex gap-1", orientation === "vertical" ? "flex-col" : "flex-row")}>
-        {navItems.map(({ href, label, icon: Icon }) => {
+        {items.map(({ href, label, icon: Icon }) => {
           const active = pathname === href || pathname.startsWith(`${href}/`);
           return (
             <li key={href}>

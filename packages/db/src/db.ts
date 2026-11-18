@@ -27,9 +27,32 @@ export interface TransactionOptions {
   maxWaitMs?: number;
 }
 
+export interface DueNotificationBatch {
+  batchId: string;
+  tenantId: string;
+}
+
 export interface DueIntegration {
   integrationId: string;
   tenantId: string;
+}
+
+export interface RetentionBatch {
+  payloadsCleared: number;
+  resultsDeleted: number;
+  auditDeleted: number;
+}
+
+/** The kinds of record that hold an encrypted value. */
+export type EncryptedRecordType = "integration" | "notification_channel";
+
+/** An encrypted record, and the key its data key is wrapped under. No ciphertext. */
+export interface EncryptedRecordRef {
+  tenantId: string;
+  type: EncryptedRecordType;
+  id: string;
+  /** Null when the stored value is not an envelope at all. */
+  keyId: string | null;
 }
 
 export interface Db {
@@ -60,6 +83,47 @@ export interface Db {
     intervalMinutes: number;
     limit?: number;
   }): Promise<DueIntegration[]>;
+
+  /**
+   * Notification batches waiting to be sent whose time has come, across all
+   * tenants. Ids only; each is then claimed and sent inside its own tenant.
+   */
+  listDueNotificationBatches(input?: { limit?: number }): Promise<DueNotificationBatch[]>;
+
+  /**
+   * Encrypted records, across all tenants, whose data key is not wrapped
+   * under `excludeKeyId`: one page, after `after`, in a stable order. Ids and
+   * key ids only; for the key rotation command.
+   */
+  listEncryptedRecords(input: {
+    excludeKeyId: string;
+    after?: Pick<EncryptedRecordRef, "tenantId" | "type" | "id"> | null;
+    limit?: number;
+  }): Promise<EncryptedRecordRef[]>;
+
+  /**
+   * One batch of retention across all tenants: empties raw payloads older
+   * than `payloadDays`, deletes results older than `resultDays` and audit
+   * entries older than `auditDays`. The database refuses periods shorter
+   * than 7, 30 and 90 days. Call again while any count equals `batchSize`.
+   */
+  applyRetention(input: {
+    payloadDays: number;
+    resultDays: number;
+    auditDays: number;
+    batchSize?: number;
+  }): Promise<RetentionBatch>;
+
+  /**
+   * Deletes up to `limit` workspaces whose deletion hold has passed, with
+   * everything they own, recording each outside the tenant. Returns their ids.
+   */
+  purgeDueTenants(input?: { limit?: number }): Promise<string[]>;
+
+  /** How many records of each type are wrapped under each key, across all tenants. */
+  countEncryptedRecordsByKey(): Promise<
+    { type: EncryptedRecordType; keyId: string | null; records: number }[]
+  >;
 
   /**
    * Throws unless the connection's role is safe to serve tenants with: not a
@@ -124,6 +188,72 @@ export function createDb({ url, maxConnections = 10 }: CreateDbOptions): Db {
         FROM list_due_integrations(make_interval(mins => ${Math.floor(intervalMinutes)}::int), ${Math.floor(limit)}::int)
       `;
       return rows.map((row) => ({ integrationId: row.integration_id, tenantId: row.tenant_id }));
+    },
+
+    async listDueNotificationBatches({ limit = 200 } = {}) {
+      const rows = await prisma.$queryRaw<{ batch_id: string; tenant_id: string }[]>`
+        SELECT batch_id, tenant_id FROM list_due_notification_batches(${Math.floor(limit)}::int)
+      `;
+      return rows.map((row) => ({ batchId: row.batch_id, tenantId: row.tenant_id }));
+    },
+
+    async listEncryptedRecords({ excludeKeyId, after = null, limit = 200 }) {
+      const rows = await prisma.$queryRaw<
+        {
+          tenant_id: string;
+          record_type: EncryptedRecordType;
+          record_id: string;
+          key_id: string | null;
+        }[]
+      >`
+        SELECT tenant_id, record_type, record_id, key_id
+        FROM list_encrypted_records(
+          ${excludeKeyId}, ${after?.tenantId ?? null}::uuid, ${after?.type ?? null}::text,
+          ${after?.id ?? null}::uuid, ${Math.floor(limit)}::int
+        )
+      `;
+      return rows.map((row) => ({
+        tenantId: row.tenant_id,
+        type: row.record_type,
+        id: row.record_id,
+        keyId: row.key_id,
+      }));
+    },
+
+    async applyRetention({ payloadDays, resultDays, auditDays, batchSize = 5000 }) {
+      const rows = await prisma.$queryRaw<
+        { payloads_cleared: bigint; results_deleted: bigint; audit_deleted: bigint }[]
+      >`
+        SELECT payloads_cleared, results_deleted, audit_deleted
+        FROM apply_retention(
+          ${Math.floor(payloadDays)}::int, ${Math.floor(resultDays)}::int,
+          ${Math.floor(auditDays)}::int, ${Math.floor(batchSize)}::int
+        )
+      `;
+      const row = rows[0];
+      return {
+        payloadsCleared: Number(row?.payloads_cleared ?? 0),
+        resultsDeleted: Number(row?.results_deleted ?? 0),
+        auditDeleted: Number(row?.audit_deleted ?? 0),
+      };
+    },
+
+    async purgeDueTenants({ limit = 10 } = {}) {
+      const rows = await prisma.$queryRaw<{ deleted_tenant_id: string }[]>`
+        SELECT deleted_tenant_id FROM purge_due_tenants(${Math.floor(limit)}::int)
+      `;
+      return rows.map((row) => row.deleted_tenant_id);
+    },
+
+    async countEncryptedRecordsByKey() {
+      const rows = await prisma.$queryRaw<
+        { record_type: EncryptedRecordType; key_id: string | null; records: bigint }[]
+      >`SELECT record_type, key_id, records FROM count_encrypted_records_by_key()`;
+      return rows.map((row) => ({
+        type: row.record_type,
+        keyId: row.key_id,
+        records: Number(row.records),
+      }));
     },
 
     async assertSafeRole() {

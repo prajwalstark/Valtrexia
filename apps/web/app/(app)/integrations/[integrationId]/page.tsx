@@ -1,18 +1,26 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { DattoCredentialsForm } from "@/components/integrations/datto-credentials-form";
+import { UniviewCredentialsForm } from "@/components/integrations/uniview-credentials-form";
+import { VspcCredentialsForm } from "@/components/integrations/vspc-credentials-form";
 import { DisconnectForm } from "@/components/integrations/disconnect-form";
 import { IntegrationDetailView } from "@/components/integrations/integration-detail-view";
 import { TestConnection } from "@/components/integrations/test-connection";
 import {
   disconnectAction,
   replaceDattoAction,
+  replaceUniviewAction,
+  replaceVspcAction,
   testNewDattoAction,
+  testNewUniviewAction,
+  testNewVspcAction,
   testSavedAction,
 } from "@/lib/actions/integrations";
 import { requireTenant } from "@/lib/auth";
 import { getSafeDb } from "@/lib/db";
 import { getIntegrationFor } from "@/lib/integrations-core";
+import { syncIntervalMinutes } from "@/lib/sync-config";
+import { getWorkspace } from "@/lib/workspace";
 
 export const metadata: Metadata = { title: "Integration" };
 
@@ -30,6 +38,7 @@ export default async function IntegrationPage({
   if (!integration) notFound();
 
   const { connected } = await searchParams;
+  const { timeZone } = await getWorkspace();
   const isDatto = integration.vendor === "datto_bcdr";
 
   return (
@@ -37,6 +46,8 @@ export default async function IntegrationPage({
       integration={integration}
       canManage={session.role === "owner"}
       now={new Date()}
+      syncIntervalMinutes={syncIntervalMinutes()}
+      timeZone={timeZone}
       justConnected={connected === "1"}
       testSlot={<TestConnection action={testSavedAction.bind(null, integration.id)} />}
       replaceSlot={
@@ -45,6 +56,20 @@ export default async function IntegrationPage({
             mode="replace"
             saveAction={replaceDattoAction.bind(null, integration.id)}
             testAction={testNewDattoAction}
+            cancelHref="/integrations"
+          />
+        ) : integration.vendor === "veeam_vspc" ? (
+          <VspcCredentialsForm
+            mode="replace"
+            saveAction={replaceVspcAction.bind(null, integration.id)}
+            testAction={testNewVspcAction}
+            cancelHref="/integrations"
+          />
+        ) : integration.vendor === "kaseya_uniview" ? (
+          <UniviewCredentialsForm
+            mode="replace"
+            saveAction={replaceUniviewAction.bind(null, integration.id)}
+            testAction={testNewUniviewAction}
             cancelHref="/integrations"
           />
         ) : undefined

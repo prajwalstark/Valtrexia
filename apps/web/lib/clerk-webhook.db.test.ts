@@ -96,14 +96,40 @@ describe("clerk webhook: organizations", () => {
     expect(await db.resolveTenantId(o.id)).not.toBeNull();
   });
 
-  it("does not delete a tenant's data when its organization is deleted", async () => {
+  it("marks the tenant for deletion after the hold when its organization is deleted, once", async () => {
     const o = org();
     await handleClerkEvent(db, membership("organizationMembership.created", o, "user_1"));
-    expect(await handleClerkEvent(db, { type: "organization.deleted", data: { id: o.id } })).toBe(
-      "noted",
-    );
+    const deleted = { type: "organization.deleted" as const, data: { id: o.id } };
+    const at = new Date("2026-11-20T10:00:00Z");
+    expect(await handleClerkEvent(db, deleted, () => at)).toBe("tenant-deletion-scheduled");
     const tenantId = (await db.resolveTenantId(o.id))!;
+    // Nothing is deleted yet.
     expect(await usersOf(tenantId)).toHaveLength(1);
+    const tenant = await db.withTenant(tenantId, ({ tx }) =>
+      tx.tenant.findUniqueOrThrow({ where: { id: tenantId } }),
+    );
+    expect(tenant).toMatchObject({
+      deletionReason: "organization_deleted",
+      deletionRequestedAt: at,
+      deleteAfter: new Date("2026-12-20T10:00:00Z"),
+    });
+    // Delivered again later: the date does not move.
+    expect(await handleClerkEvent(db, deleted, () => new Date("2026-11-25T00:00:00Z"))).toBe(
+      "ignored",
+    );
+    const audit = await db.withTenant(tenantId, ({ tx }) =>
+      tx.auditLog.findMany({ where: { action: "workspace.deletion_requested" } }),
+    );
+    expect(audit).toMatchObject([
+      { actorType: "system", metadata: { reason: "organization_deleted" } },
+    ]);
+  });
+
+  it("ignores the deletion of an organization it never knew", async () => {
+    expect(
+      await handleClerkEvent(db, { type: "organization.deleted", data: { id: org().id } }),
+    ).toBe("ignored");
+    expect(await handleClerkEvent(db, { type: "organization.deleted", data: {} })).toBe("ignored");
   });
 });
 

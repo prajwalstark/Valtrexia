@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { z } from "zod";
-import type { KeyProvider } from "./key-provider";
+import { KeyServiceUnavailableError, type KeyProvider } from "./key-provider";
 import { Secret } from "./secret";
 
 /**
@@ -24,7 +24,7 @@ export interface EncryptionContext {
   /** The record the value belongs to, for example an integration id. */
   recordId: string;
   /** What the value is, so the same record can hold more than one secret. */
-  purpose: "integration-credentials";
+  purpose: "integration-credentials" | "notification-channel";
 }
 
 const envelopeSchema = z.strictObject({
@@ -96,6 +96,8 @@ export async function encryptJson(
  *
  * @throws DecryptionError if the envelope is malformed, was tampered with, was
  *   encrypted under a different key, or belongs to a different context.
+ * @throws KeyServiceUnavailableError if the key service could not answer;
+ *   nothing is known to be wrong with the value, and a retry can succeed.
  */
 export async function decryptJson<T = unknown>(
   envelope: unknown,
@@ -123,9 +125,65 @@ export async function decryptJson<T = unknown>(
     } finally {
       plaintext.fill(0);
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof KeyServiceUnavailableError) throw error;
     throw new DecryptionError();
   } finally {
     dataKey?.fill(0);
   }
+}
+
+/**
+ * Re-wraps a stored envelope's data key with the key provider's current key,
+ * for key rotation. The value's own ciphertext, IV and tag are kept as they
+ * are; only the small wrapped data key changes.
+ *
+ * Before re-wrapping, the data key is checked against the ciphertext's
+ * authentication tag, so a damaged record is reported rather than given a
+ * fresh wrapping. That check passes the value through memory once, and the
+ * buffer is zeroed at once; the value is never returned.
+ *
+ * @throws DecryptionError, KeyServiceUnavailableError as `decryptJson` does.
+ */
+export async function rewrapEnvelope(
+  envelope: unknown,
+  context: EncryptionContext,
+  keyProvider: KeyProvider,
+): Promise<EncryptedEnvelope> {
+  let dataKey: Buffer | undefined;
+  let parsed: EncryptedEnvelope;
+  let aad: Buffer;
+  try {
+    parsed = envelopeSchema.parse(envelope);
+    aad = contextBytes(context);
+    dataKey = await keyProvider.unwrapKey(
+      Buffer.from(parsed.wrappedKey, "base64"),
+      parsed.keyId,
+      aad,
+    );
+    const decipher = createDecipheriv("aes-256-gcm", dataKey, Buffer.from(parsed.iv, "base64"));
+    decipher.setAAD(aad);
+    decipher.setAuthTag(Buffer.from(parsed.tag, "base64"));
+    const plaintext = Buffer.concat([
+      decipher.update(Buffer.from(parsed.ciphertext, "base64")),
+      decipher.final(),
+    ]);
+    plaintext.fill(0);
+  } catch (error) {
+    dataKey?.fill(0);
+    if (error instanceof KeyServiceUnavailableError) throw error;
+    throw new DecryptionError();
+  }
+  try {
+    const { keyId, wrappedKey } = await keyProvider.wrapKey(dataKey, aad);
+    return { ...parsed, keyId, wrappedKey: wrappedKey.toString("base64") };
+  } finally {
+    dataKey.fill(0);
+  }
+}
+
+/** The key id an envelope's data key is wrapped under, or null if it is not an envelope. */
+export function envelopeKeyId(envelope: unknown): string | null {
+  const parsed = envelopeSchema.safeParse(envelope);
+  return parsed.success ? parsed.data.keyId : null;
 }

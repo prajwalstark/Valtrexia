@@ -1,6 +1,12 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { Writable } from "node:stream";
-import { createLogger, LocalKeyProvider, Secret } from "@valtrexia/core/server";
+import {
+  createLogger,
+  KeyServiceUnavailableError,
+  LocalKeyProvider,
+  Secret,
+  type KeyProvider,
+} from "@valtrexia/core/server";
 import { createDb, createIntegration, type Db } from "@valtrexia/db";
 import { afterAll, beforeAll, beforeEach, describe, expect, inject, it } from "vitest";
 import {
@@ -14,7 +20,7 @@ import {
   type ActionState,
   type IntegrationDeps,
 } from "./integrations-core";
-import { createRateLimiter } from "./rate-limit";
+import { createRateLimiter, RateLimiterUnavailableError } from "./rate-limit";
 import type { TenantSession } from "./session-core";
 
 const urls = inject("databaseUrls");
@@ -58,6 +64,21 @@ function datto(
       : new Response("unauthorized", { status: 401 });
   }) as typeof fetch;
   return { impl, seen };
+}
+
+/** The test key provider, with one operation failing as KMS does during an outage. */
+function keyServiceDown(operation: "wrap" | "unwrap"): KeyProvider {
+  return {
+    wrapKey: (key, aad) =>
+      operation === "wrap"
+        ? Promise.reject(new KeyServiceUnavailableError())
+        : keyProvider.wrapKey(key, aad),
+    unwrapKey: (wrapped, keyId, aad) =>
+      operation === "unwrap"
+        ? Promise.reject(new KeyServiceUnavailableError())
+        : keyProvider.unwrapKey(wrapped, keyId, aad),
+    canUnwrap: (keyId) => keyProvider.canUnwrap(keyId),
+  };
 }
 
 function deps(fetchImpl: typeof fetch, overrides: Partial<IntegrationDeps> = {}): IntegrationDeps {
@@ -362,6 +383,21 @@ describe("testNewDattoCredentials", () => {
     // Another tenant has its own allowance.
     expect((await testNewDattoCredentials(limited, other, form())).status).toBe("ok");
   });
+
+  it("refuses a test, without calling the vendor, when the limit cannot be checked", async () => {
+    const session = await newTenant();
+    const api = datto();
+    const down = deps(api.impl, {
+      limiter: { take: () => Promise.reject(new RateLimiterUnavailableError()) },
+    });
+    expect(await testNewDattoCredentials(down, session, form())).toEqual({
+      status: "error",
+      message: "Connection tests are unavailable for a moment. Try again shortly.",
+    });
+    expect(await connectDatto(down, session, form())).toMatchObject({ status: "error" });
+    expect(api.seen).toEqual([]);
+    expect(await listIntegrationsFor({ db }, session)).toEqual([]);
+  });
 });
 
 describe("testSavedIntegration", () => {
@@ -434,6 +470,46 @@ describe("testSavedIntegration", () => {
       status: "error",
       message: "The saved keys could not be read. Replace them with a new key pair.",
     });
+  });
+
+  it("says the key service is unavailable, not that the keys are bad, during an outage", async () => {
+    const session = await newTenant();
+    const id = idOf(await connectDatto(deps(datto().impl), session, form()));
+    const state = await testSavedIntegration(
+      deps(datto().impl, { keyProvider: keyServiceDown("unwrap") }),
+      session,
+      id,
+    );
+    expect(state).toEqual({
+      status: "error",
+      message:
+        "The saved keys could not be read just now: the encryption key service could not be reached. Try again shortly.",
+    });
+  });
+
+  it("saves nothing, and says why, when the key service cannot encrypt new keys", async () => {
+    const session = await newTenant();
+    const state = await connectDatto(
+      deps(datto().impl, { keyProvider: keyServiceDown("wrap") }),
+      session,
+      form(),
+    );
+    expect(state).toEqual({
+      status: "error",
+      message:
+        "The encryption key service could not be reached, so nothing was saved. Try again shortly.",
+    });
+    expect(await listIntegrationsFor({ db }, session)).toEqual([]);
+
+    const id = idOf(await connectDatto(deps(datto().impl), session, form()));
+    const replaced = await replaceDattoCredentials(
+      deps(datto().impl, { keyProvider: keyServiceDown("wrap") }),
+      session,
+      id,
+      form(),
+    );
+    expect(replaced).toMatchObject({ status: "error" });
+    expect((replaced as { message: string }).message).toMatch(/nothing was saved/);
   });
 
   it("works for the demo vendor as well", async () => {
@@ -666,6 +742,9 @@ describe("what the interface is given", () => {
         "name",
         "syncStatus",
         "vendor",
+        "lastSyncErrorKind",
+        "consecutiveFailures",
+        "failingSince",
       ].sort(),
     );
     expect(listed[0]).toMatchObject({ id, credentialHint: "9f3a" });

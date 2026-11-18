@@ -14,9 +14,30 @@ describe("worker configuration", () => {
       syncIntervalMinutes: 15,
       syncConcurrency: 5,
       schedulerTickSeconds: 60,
+      notificationTickSeconds: 30,
       dattoBaseUrl: undefined,
       logLevel: "info",
+      // Decision 8: payloads 90 days, results 13 months, audit entries 24 months.
+      retention: { payloadDays: 90, resultDays: 395, auditDays: 730 },
     });
+  });
+
+  it("reads retention periods, and refuses ones shorter than the minimum", () => {
+    expect(
+      parseConfig({
+        ...base,
+        RETENTION_RAW_PAYLOAD_DAYS: "30",
+        RETENTION_RESULT_DAYS: "730",
+        RETENTION_AUDIT_DAYS: "2555",
+      }).retention,
+    ).toEqual({ payloadDays: 30, resultDays: 730, auditDays: 2555 });
+    for (const [name, value] of [
+      ["RETENTION_RAW_PAYLOAD_DAYS", "6"],
+      ["RETENTION_RESULT_DAYS", "29"],
+      ["RETENTION_AUDIT_DAYS", "89"],
+    ] as const) {
+      expect(() => parseConfig({ ...base, [name]: value })).toThrow(name);
+    }
   });
 
   it("reads overrides, and treats blank values as not set", () => {
@@ -32,6 +53,7 @@ describe("worker configuration", () => {
       syncIntervalMinutes: 30,
       syncConcurrency: 2,
       schedulerTickSeconds: 60,
+      notificationTickSeconds: 30,
       dattoBaseUrl: undefined,
       logLevel: "debug",
     });

@@ -5,12 +5,15 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./server": "./src/server.ts"
+    "./server": "./src/server.ts",
+    "./format": "./src/format.ts",
+    "./testing/fake-kms": "./src/crypto/fake-kms.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@aws-sdk/client-kms": "3.1156.0",
     "pino": "^10.4.0",
     "zod": "^4.6.7"
   }

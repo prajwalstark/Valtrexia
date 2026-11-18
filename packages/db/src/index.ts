@@ -7,12 +7,23 @@ export {
   type CreateDbOptions,
   type Db,
   type DueIntegration,
+  type DueNotificationBatch,
+  type EncryptedRecordRef,
+  type EncryptedRecordType,
+  type RetentionBatch,
   type TenantContext,
   type TenantTx,
   type TransactionOptions,
 } from "./db";
 export { InvalidTenantIdError, UnsafeDatabaseRoleError } from "./errors";
-export { recordAudit, type AuditEntry } from "./repositories/audit";
+export { recordAudit, recordAudits, type AuditEntry } from "./repositories/audit";
+export { rewrapRecord, type RewrapOutcome } from "./repositories/key-rotation";
+export {
+  cancelTenantDeletion,
+  getPendingDeletion,
+  requestTenantDeletion,
+  type PendingDeletion,
+} from "./repositories/offboarding";
 export {
   deactivateUser,
   upsertUser,
@@ -34,6 +45,28 @@ export {
   type IntegrationSummary,
   type ReplaceCredentialsInput,
 } from "./repositories/integrations";
+export {
+  channelSummarySelect,
+  ChannelNameTakenError,
+  claimNotificationBatch,
+  createEmailChannel,
+  createWebhookChannel,
+  decryptChannelDestination,
+  deleteNotificationChannel,
+  finishNotificationBatch,
+  listNotificationChannels,
+  listRecentBatches,
+  queueIncidentNotifications,
+  queueIntegrationHealthNotifications,
+  queueTestNotification,
+  setNotificationChannelEnabled,
+  type BatchOutcome,
+  type ChannelPreferencesInput,
+  type ChannelSummary,
+  type ClaimedBatch,
+  type RecentBatch,
+  type WebhookDestination,
+} from "./repositories/notifications";
 export {
   ActorType,
   BackupStatus,

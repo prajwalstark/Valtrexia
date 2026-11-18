@@ -1,12 +1,19 @@
 import { isMockAllowed } from "@valtrexia/connectors";
 import { brand } from "@valtrexia/core";
-import { createKeyProviderFromEnv, createLogger } from "@valtrexia/core/server";
+import {
+  assertProductionTransport,
+  createEmailSenderFromEnv,
+  createKeyProviderFromEnv,
+  createLogger,
+  outboundPolicyFromEnv,
+} from "@valtrexia/core/server";
 import { createDb } from "@valtrexia/db";
 import { parseConfig } from "./config";
 import { startWorker } from "./worker";
 
 async function main(): Promise<void> {
   const config = parseConfig(process.env);
+  assertProductionTransport(process.env);
   const logger = createLogger({ name: "worker", level: config.logLevel });
 
   // Each running sync holds at most one connection at a time; leave headroom
@@ -26,7 +33,11 @@ async function main(): Promise<void> {
     syncIntervalMinutes: config.syncIntervalMinutes,
     syncConcurrency: config.syncConcurrency,
     schedulerTickSeconds: config.schedulerTickSeconds,
+    notificationTickSeconds: config.notificationTickSeconds,
+    outboundPolicy: outboundPolicyFromEnv(process.env),
+    emailSender: createEmailSenderFromEnv(process.env, logger),
     dattoBaseUrl: config.dattoBaseUrl,
+    retention: config.retention,
   });
   logger.info(`${brand.name} worker is running`);
 

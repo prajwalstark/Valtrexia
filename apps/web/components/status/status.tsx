@@ -1,5 +1,6 @@
 import type { BackupStatus, Health } from "@valtrexia/core";
 import {
+  ClockAlert,
   CircleCheck,
   CircleDashed,
   CircleHelp,
@@ -56,6 +57,16 @@ export const STATUS_META: Record<
     tone: "text-status-success",
     fill: "var(--status-success)",
   },
+};
+
+/** How each kind of incident is named and drawn, wherever incidents are listed. */
+export const INCIDENT_META: Record<
+  "failed" | "missed" | "stale",
+  { label: string; icon: LucideIcon; tone: string }
+> = {
+  failed: { label: "Backup failed", icon: CircleX, tone: "text-status-critical" },
+  missed: { label: "Backup missed", icon: CircleSlash, tone: "text-status-critical" },
+  stale: { label: "SLA breached", icon: ClockAlert, tone: "text-status-critical" },
 };
 
 export const HEALTH_META: Record<

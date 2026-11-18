@@ -73,3 +73,17 @@ export class InvalidCredentialsShapeError extends ConnectorError {
     super("The saved credentials are incomplete. Enter them again.");
   }
 }
+
+/**
+ * The server named in the integration may not be connected to: it is not
+ * https, it resolves to a private or internal address, or its certificate
+ * could not be verified. The message is the outbound guard's, written for the
+ * person who entered the address. Retrying cannot help; the address or the
+ * server's certificate has to change.
+ */
+export class DestinationRefusedError extends ConnectorError {
+  readonly retryable = false;
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+  }
+}

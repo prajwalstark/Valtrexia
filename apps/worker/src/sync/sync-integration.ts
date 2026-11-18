@@ -1,30 +1,52 @@
 import {
+  AuthError,
   ConnectorError,
+  ConnectorUnavailableError,
   createConnector,
+  DestinationRefusedError,
+  InvalidCredentialsShapeError,
+  InvalidResponseError,
+  NetworkError,
+  RateLimitError,
+  VendorError,
   type Connector,
   type ConnectorDeps,
   type VendorAsset,
   type VendorResult,
 } from "@valtrexia/connectors";
 import {
+  assessIntegrationHealth,
+  clampAssetHours,
   deriveCurrentStatus,
   planIncidents,
   RAISED_INCIDENT_TYPES,
   evaluateMissedBackup,
+  evaluateSla,
   isCompletedBackup,
   SYNC_INTERVAL_MINUTES,
   type BackupStatus,
+  type IncidentChange,
   type MissedBackupVerdict,
   type RaisedIncidentType,
+  type SlaVerdict,
+  type SyncErrorKind,
   type VendorId,
 } from "@valtrexia/core";
 import {
   DecryptionError,
+  KeyServiceUnavailableError,
   type KeyProvider,
   type Logger,
+  type OutboundPolicy,
   type Secret,
 } from "@valtrexia/core/server";
-import { decryptIntegrationCredentials, Prisma, type Db } from "@valtrexia/db";
+import {
+  decryptIntegrationCredentials,
+  Prisma,
+  queueIncidentNotifications,
+  queueIntegrationHealthNotifications,
+  type Db,
+} from "@valtrexia/db";
 
 const HOUR_MS = 3_600_000;
 /** How far back the first sync of an integration reaches. */
@@ -46,6 +68,8 @@ export interface SyncDeps {
   fetch?: typeof fetch;
   /** Overrides Datto's API root. From server configuration only, never a request. */
   dattoBaseUrl?: string;
+  /** What a tenant-supplied server address may be. Strict unless set for local development. */
+  outboundPolicy?: OutboundPolicy;
   syncIntervalMinutes?: number;
   /** Replaces the connector registry. For tests. */
   connectorFactory?: (
@@ -63,6 +87,8 @@ export interface SyncTarget {
 export interface AssetVerdict {
   assetId: string;
   verdict: MissedBackupVerdict;
+  /** Whether the asset has gone longer than its SLA without a completed backup. */
+  sla: SlaVerdict;
   currentStatus: BackupStatus;
   /** The latest result as the vendor reported it, before the missed rule. */
   lastResultStatus: BackupStatus | null;
@@ -82,6 +108,8 @@ export interface SyncSummary {
   verdicts: AssetVerdict[];
   incidentsOpened: number;
   incidentsClosed: number;
+  /** Notification messages queued by this sync. */
+  notificationsQueued: number;
   since: Date;
 }
 
@@ -114,7 +142,18 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
   const started = await db.withTenant(target.tenantId, async ({ tx }) => {
     const integration = await tx.integration.findUnique({
       where: { id: target.integrationId },
-      select: { id: true, vendor: true, credentialsEnc: true, lastSyncAt: true },
+      select: {
+        id: true,
+        vendor: true,
+        credentialsEnc: true,
+        lastSyncAt: true,
+        createdAt: true,
+        consecutiveFailures: true,
+        failingSince: true,
+        lastSyncErrorKind: true,
+        unhealthySince: true,
+        name: true,
+      },
     });
     if (!integration) throw new IntegrationNotFoundError();
     const tenant = await tx.tenant.findUniqueOrThrow({
@@ -145,6 +184,7 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
       now: () => now,
       ...(deps.fetch ? { fetch: deps.fetch } : {}),
       ...(deps.dattoBaseUrl ? { dattoBaseUrl: deps.dattoBaseUrl } : {}),
+      ...(deps.outboundPolicy ? { outboundPolicy: deps.outboundPolicy } : {}),
     };
     const connector = (deps.connectorFactory ?? createConnector)(
       started.integration.vendor,
@@ -228,7 +268,8 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
               isArchived: a.isArchived,
               // Set once, from the vendor's schedule when it reports one.
               // After that the value belongs to the MSP, who may tune it.
-              expectedFrequencyHours: a.expectedFrequencyHours ?? 24,
+              expectedFrequencyHours:
+                a.expectedFrequencyHours === null ? 24 : clampAssetHours(a.expectedFrequencyHours),
               firstSeenAt: now,
               lastSeenAt: now,
             })),
@@ -335,6 +376,7 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
           unknown: 0,
         };
         const verdicts: AssetVerdict[] = [];
+        const lastBackupByAsset = new Map<string, Date | null>();
 
         for (const asset of assetByVendorId.values()) {
           const fetched = fetchedByAsset.get(asset.id) ?? [];
@@ -353,10 +395,11 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
             }
           }
 
-          const verdict = evaluateMissedBackup({
+          const judged = {
             now,
             asset: {
               expectedFrequencyHours: asset.expectedFrequencyHours,
+              slaHours: asset.slaHours,
               firstSeenAt: asset.firstSeenAt,
               lastCompletedAt: lastSuccessAt,
               mutedUntil: asset.mutedUntil,
@@ -365,24 +408,30 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
             },
             graceHours: started.graceHours,
             // This sync has just read the vendor successfully.
-            integration: { syncStatus: "ok", lastSyncAt: now },
+            integration: { syncStatus: "ok" as const, lastSyncAt: now },
             syncIntervalMinutes,
-          });
+          };
+          const verdict = evaluateMissedBackup(judged);
+          const sla = evaluateSla(judged);
           const currentStatus = deriveCurrentStatus(lastResultStatus, verdict);
+          // The moment the SLA was crossed, not the moment we noticed.
+          const staleSince = sla.state === "breached" ? sla.deadline : null;
 
           if (
             currentStatus !== asset.currentStatus ||
             lastResultStatus !== asset.lastResultStatus ||
             lastResultAt?.getTime() !== asset.lastResultAt?.getTime() ||
-            lastSuccessAt?.getTime() !== asset.lastSuccessAt?.getTime()
+            lastSuccessAt?.getTime() !== asset.lastSuccessAt?.getTime() ||
+            staleSince?.getTime() !== asset.staleSince?.getTime()
           ) {
             await tx.asset.update({
               where: { id: asset.id },
-              data: { currentStatus, lastResultStatus, lastResultAt, lastSuccessAt },
+              data: { currentStatus, lastResultStatus, lastResultAt, lastSuccessAt, staleSince },
             });
           }
           statusCounts[currentStatus] += 1;
-          verdicts.push({ assetId: asset.id, verdict, currentStatus, lastResultStatus });
+          lastBackupByAsset.set(asset.id, lastSuccessAt);
+          verdicts.push({ assetId: asset.id, verdict, sla, currentStatus, lastResultStatus });
         }
 
         // Incidents ...........................................................
@@ -394,8 +443,9 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
             type: { in: [...RAISED_INCIDENT_TYPES] },
             asset: { integrationId },
           },
-          select: { id: true, assetId: true, type: true },
+          select: { id: true, assetId: true, type: true, openedAt: true },
         });
+        const openedAtById = new Map(openIncidents.map((i) => [i.id, i.openedAt]));
         const openByAsset = new Map<string, Map<RaisedIncidentType, string>>();
         for (const incident of openIncidents) {
           const types = openByAsset.get(incident.assetId) ?? new Map<RaisedIncidentType, string>();
@@ -404,30 +454,122 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
         }
 
         const toOpen: Prisma.IncidentCreateManyInput[] = [];
-        const toClose: string[] = [];
+        const toClose: {
+          id: string;
+          assetId: string;
+          type: RaisedIncidentType;
+          suppressed: boolean;
+        }[] = [];
         for (const entry of verdicts) {
           const open = openByAsset.get(entry.assetId);
           const plan = planIncidents({
             lastResultStatus: entry.lastResultStatus,
             verdict: entry.verdict,
+            sla: entry.sla,
             open: new Set(open?.keys() ?? []),
           });
           for (const type of plan.open) {
             toOpen.push({ tenantId, assetId: entry.assetId, type, openedAt: now });
           }
-          for (const type of plan.close) toClose.push(open!.get(type)!);
+          for (const type of plan.close) {
+            toClose.push({
+              id: open!.get(type)!,
+              assetId: entry.assetId,
+              type,
+              // Closed because nobody is watching it, not because it recovered.
+              suppressed: entry.verdict.state === "suppressed",
+            });
+          }
         }
-        if (toOpen.length > 0) await tx.incident.createMany({ data: toOpen });
+        const opened =
+          toOpen.length > 0
+            ? await tx.incident.createManyAndReturn({
+                data: toOpen,
+                select: { id: true, assetId: true, type: true, openedAt: true },
+              })
+            : [];
         if (toClose.length > 0) {
           await tx.incident.updateMany({
-            where: { id: { in: toClose }, closedAt: null },
+            where: { id: { in: toClose.map((incident) => incident.id) }, closedAt: null },
             data: { closedAt: now },
           });
         }
 
+        // Notifications ......................................................
+        // Queued in the same transaction, so a message exists exactly when
+        // the incident change it reports does. The worker sends them later.
+        let notificationsQueued = 0;
+        if (opened.length > 0 || toClose.length > 0) {
+          const assetById = new Map([...assetByVendorId.values()].map((a) => [a.id, a]));
+          const clientIds = [...new Set([...assetById.values()].map((a) => a.clientId))];
+          const clients = await tx.client.findMany({
+            where: { id: { in: clientIds } },
+            select: { id: true, name: true },
+          });
+          const clientName = new Map(clients.map((c) => [c.id, c.name]));
+          const describe = (assetId: string) => {
+            const asset = assetById.get(assetId)!;
+            return {
+              client: { id: asset.clientId, name: clientName.get(asset.clientId) ?? "" },
+              asset: { id: asset.id, name: asset.name },
+              lastBackupAt: lastBackupByAsset.get(asset.id) ?? null,
+            };
+          };
+          const changes: IncidentChange[] = [
+            ...opened.map((incident) => ({
+              incidentId: incident.id,
+              type: incident.type as RaisedIncidentType,
+              event: "opened" as const,
+              reason: null,
+              openedAt: incident.openedAt,
+              closedAt: null,
+              ...describe(incident.assetId),
+            })),
+            ...toClose.map((incident) => ({
+              incidentId: incident.id,
+              type: incident.type,
+              event: "closed" as const,
+              reason: incident.suppressed ? ("suppressed" as const) : ("resolved" as const),
+              openedAt: openedAtById.get(incident.id) ?? now,
+              closedAt: now,
+              ...describe(incident.assetId),
+            })),
+          ];
+          notificationsQueued += await queueIncidentNotifications(
+            { tx, tenantId },
+            { changes, now },
+          );
+        }
+        if (started.integration.unhealthySince) {
+          // It had been reported unhealthy. Say that it has recovered, once.
+          notificationsQueued += await queueIntegrationHealthNotifications(
+            { tx, tenantId },
+            {
+              now,
+              state: "recovered",
+              integration: {
+                id: integrationId,
+                name: started.integration.name,
+                vendor: started.integration.vendor,
+              },
+              failingSince: started.integration.failingSince,
+              error: null,
+              needsAction: false,
+            },
+          );
+        }
+
         await tx.integration.update({
           where: { id: integrationId },
-          data: { syncStatus: "ok", lastSyncAt: now, lastSyncError: null },
+          data: {
+            syncStatus: "ok",
+            lastSyncAt: now,
+            lastSyncError: null,
+            lastSyncErrorKind: null,
+            consecutiveFailures: 0,
+            failingSince: null,
+            unhealthySince: null,
+          },
         });
 
         return {
@@ -441,6 +583,7 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
           verdicts,
           incidentsOpened: toOpen.length,
           incidentsClosed: toClose.length,
+          notificationsQueued,
           since,
         } satisfies SyncSummary;
       },
@@ -459,21 +602,101 @@ export async function syncIntegration(deps: SyncDeps, target: SyncTarget): Promi
       },
       "sync finished",
     );
+    if (started.integration.consecutiveFailures > 0) {
+      log.info(
+        {
+          failures: started.integration.consecutiveFailures,
+          failingSince: started.integration.failingSince,
+        },
+        "integration recovered",
+      );
+    }
     return summary;
   } catch (error) {
     log.error({ err: error }, "sync failed");
+    const kind = classifyFailure(error);
+    const before = started.integration;
+    const failure = {
+      syncStatus: "error" as const,
+      lastSyncError: describeFailure(error),
+      lastSyncErrorKind: kind,
+      // Only one sync of an integration runs at a time, so the count read at
+      // the start of this one is still the count now.
+      consecutiveFailures: before.consecutiveFailures + 1,
+      failingSince: before.failingSince ?? now,
+    };
+    const health = (integration: {
+      syncStatus: "running" | "error";
+      consecutiveFailures: number;
+      failingSince: Date | null;
+      lastSyncErrorKind: SyncErrorKind | null;
+    }) =>
+      assessIntegrationHealth({
+        now,
+        lastSyncAt: before.lastSyncAt,
+        createdAt: before.createdAt,
+        syncIntervalMinutes,
+        ...integration,
+      });
+    const after = health(failure);
+    // Said once per run of failures: `unhealthySince` records that it was.
+    const becameUnhealthy = after.state === "unhealthy" && before.unhealthySince === null;
+
     await db
-      .withTenant(target.tenantId, ({ tx }) =>
-        tx.integration.update({
+      .withTenant(target.tenantId, async ({ tx, tenantId }) => {
+        await tx.integration.update({
           where: { id: target.integrationId },
-          data: { syncStatus: "error", lastSyncError: describeFailure(error) },
-        }),
-      )
+          data: { ...failure, ...(becameUnhealthy ? { unhealthySince: now } : {}) },
+        });
+        if (becameUnhealthy) {
+          await queueIntegrationHealthNotifications(
+            { tx, tenantId },
+            {
+              now,
+              state: "unhealthy",
+              integration: { id: before.id, name: before.name, vendor: before.vendor },
+              failingSince: failure.failingSince,
+              error: failure.lastSyncError,
+              needsAction: after.needsAction,
+            },
+          );
+        }
+      })
       .catch((secondary: unknown) => {
         log.error({ err: secondary }, "could not record the sync failure");
       });
+
+    if (becameUnhealthy) {
+      log.warn(
+        { kind, failures: failure.consecutiveFailures, failingSince: failure.failingSince },
+        "integration is unhealthy",
+      );
+    }
     throw error;
   }
+}
+
+/**
+ * What sort of failure this was, for deciding whether retrying can help.
+ * Anything we do not recognize is our own fault until shown otherwise.
+ */
+export function classifyFailure(error: unknown): SyncErrorKind {
+  if (error instanceof AuthError) return "auth";
+  // A refused destination is the saved connection details' fault, like a bad
+  // key: it will not fix itself, so it is reported as needing action at once.
+  if (
+    error instanceof InvalidCredentialsShapeError ||
+    error instanceof DecryptionError ||
+    error instanceof DestinationRefusedError
+  ) {
+    return "credentials";
+  }
+  if (error instanceof RateLimitError) return "rate_limited";
+  if (error instanceof NetworkError) return "network";
+  if (error instanceof VendorError) return "vendor";
+  if (error instanceof InvalidResponseError) return "invalid_response";
+  if (error instanceof ConnectorUnavailableError) return "unavailable";
+  return "internal";
 }
 
 /**
@@ -485,6 +708,9 @@ export function describeFailure(error: unknown): string {
   if (error instanceof ConnectorError) return error.message;
   if (error instanceof DecryptionError) {
     return "The saved credentials could not be read. Enter them again.";
+  }
+  if (error instanceof KeyServiceUnavailableError) {
+    return "The encryption key service could not be reached. The next sync tries again.";
   }
   return "The sync failed unexpectedly. It will be retried.";
 }

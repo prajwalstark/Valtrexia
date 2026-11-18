@@ -16,6 +16,14 @@ const schema = z.object({
   SYNC_CONCURRENCY: number(1, 50, 5),
   /** How often the scheduler looks for integrations that are due. */
   SCHEDULER_TICK_SECONDS: number(5, 3600, 60),
+  /** How often the worker looks for notifications to send. */
+  NOTIFICATION_TICK_SECONDS: number(5, 3600, 30),
+  /** Raw vendor payloads are emptied after this many days. */
+  RETENTION_RAW_PAYLOAD_DAYS: number(7, 3650, 90),
+  /** Backup results are deleted after this many days (13 months). */
+  RETENTION_RESULT_DAYS: number(30, 3650, 395),
+  /** Audit entries are deleted after this many days (24 months). */
+  RETENTION_AUDIT_DAYS: number(90, 3650, 730),
   DATTO_API_BASE_URL: z.preprocess(blankToUndefined, z.url().optional()),
   LOG_LEVEL: z.preprocess(
     blankToUndefined,
@@ -29,8 +37,16 @@ export interface WorkerConfig {
   syncIntervalMinutes: number;
   syncConcurrency: number;
   schedulerTickSeconds: number;
+  notificationTickSeconds: number;
   dattoBaseUrl: string | undefined;
   logLevel: string;
+  retention: RetentionPolicy;
+}
+
+export interface RetentionPolicy {
+  payloadDays: number;
+  resultDays: number;
+  auditDays: number;
 }
 
 /**
@@ -54,7 +70,13 @@ export function parseConfig(env: Record<string, string | undefined>): WorkerConf
     syncIntervalMinutes: value.SYNC_INTERVAL_MINUTES,
     syncConcurrency: value.SYNC_CONCURRENCY,
     schedulerTickSeconds: value.SCHEDULER_TICK_SECONDS,
+    notificationTickSeconds: value.NOTIFICATION_TICK_SECONDS,
     dattoBaseUrl: value.DATTO_API_BASE_URL,
     logLevel: value.LOG_LEVEL,
+    retention: {
+      payloadDays: value.RETENTION_RAW_PAYLOAD_DAYS,
+      resultDays: value.RETENTION_RESULT_DAYS,
+      auditDays: value.RETENTION_AUDIT_DAYS,
+    },
   };
 }

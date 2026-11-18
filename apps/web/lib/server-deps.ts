@@ -1,17 +1,55 @@
 import "server-only";
 import { isMockAllowed } from "@valtrexia/connectors";
-import { createLogger } from "@valtrexia/core/server";
+import {
+  assertProductionTransport,
+  createLogger,
+  outboundPolicyFromEnv,
+} from "@valtrexia/core/server";
+import { Redis } from "ioredis";
 import { getSafeDb } from "./db";
 import type { IntegrationDeps } from "./integrations-core";
 import { getKeyProvider } from "./keys";
-import { createRateLimiter } from "./rate-limit";
+import { createRateLimiter, createRedisRateLimiter, type RateLimiter } from "./rate-limit";
 import { clientIp } from "./request";
 
 const logger = createLogger({ name: "web" });
 
 // Ten connection tests per tenant per minute: plenty for a person correcting
 // a typo, far too few to try keys against a vendor in bulk.
-const connectionTestLimiter = createRateLimiter({ limit: 10, windowMs: 60_000 });
+const CONNECTION_TESTS = { name: "connection-test", limit: 10, windowMs: 60_000 };
+
+let connectionTestLimiter: RateLimiter | undefined;
+
+/**
+ * Shared through Redis when REDIS_URL is set, so every web instance counts
+ * against one limit; required in production. Without it, in development, the
+ * count is kept in this process.
+ */
+function getConnectionTestLimiter(): RateLimiter {
+  if (connectionTestLimiter) return connectionTestLimiter;
+  const url = process.env.REDIS_URL;
+  if (!url) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("REDIS_URL is not set. The web app needs Redis in production.");
+    }
+    connectionTestLimiter = createRateLimiter(CONNECTION_TESTS);
+    return connectionTestLimiter;
+  }
+  assertProductionTransport(process.env, { redis: true });
+  const redis = new Redis(url, {
+    lazyConnect: true,
+    // Fail a command within seconds rather than queueing it while Redis is away.
+    maxRetriesPerRequest: 1,
+    commandTimeout: 2_000,
+    connectTimeout: 2_000,
+  });
+  // Without a listener a connection error would crash the process. The URL is never logged.
+  redis.on("error", (error: Error) =>
+    logger.warn({ errorName: error.name }, "rate limiter's Redis connection failed"),
+  );
+  connectionTestLimiter = createRedisRateLimiter({ redis, ...CONNECTION_TESTS });
+  return connectionTestLimiter;
+}
 
 /** What the integrations logic needs, assembled from configuration for one request. */
 export async function integrationDeps(): Promise<IntegrationDeps> {
@@ -25,10 +63,30 @@ export async function integrationDeps(): Promise<IntegrationDeps> {
       logger,
       // A person is waiting: one retry, not the sync job's patient four.
       maxRetries: 1,
+      // A VSPC console's address comes from a person. Never relaxed in production.
+      outboundPolicy: outboundPolicyFromEnv(process.env),
       ...(dattoBaseUrl ? { dattoBaseUrl } : {}),
     },
-    limiter: connectionTestLimiter,
+    limiter: getConnectionTestLimiter(),
     logger,
     ip: await clientIp(),
   };
+}
+
+/** What the notification settings need, assembled from configuration for one request. */
+export async function notificationDeps() {
+  return {
+    db: await getSafeDb(),
+    keyProvider: getKeyProvider(),
+    // Server configuration only. Never relaxed in production, whatever is set.
+    outboundPolicy: outboundPolicyFromEnv(process.env),
+    // The web app and the worker must be given the same EMAIL_PROVIDER.
+    emailAvailable: emailConfigured(process.env),
+    ip: await clientIp(),
+  };
+}
+
+/** Whether this server can send email. The worker decides how; here it only matters whether. */
+export function emailConfigured(env: Record<string, string | undefined>): boolean {
+  return (env.EMAIL_PROVIDER?.trim() ?? "") !== "";
 }

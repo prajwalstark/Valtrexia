@@ -8,7 +8,17 @@ export const SCHEDULER_QUEUE = "scheduler";
 /** Every key this application writes to Redis starts with this. */
 export const QUEUE_PREFIX = "valtrexia";
 
+/** The repeating job that sends notifications that are due. */
+export const NOTIFICATION_QUEUE = "notifications";
+
+/** The repeating job that applies retention and deletes offboarded tenants. */
+export const MAINTENANCE_QUEUE = "maintenance";
+
 export const SYNC_JOB = "sync-integration";
+export const MAINTENANCE_JOB = "maintain";
+export const MAINTENANCE_SCHEDULER_ID = "maintenance";
+export const DELIVER_JOB = "deliver";
+export const DELIVER_SCHEDULER_ID = "deliver-notifications";
 export const TICK_JOB = "tick";
 export const TICK_SCHEDULER_ID = "find-due-integrations";
 

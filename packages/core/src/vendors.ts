@@ -25,14 +25,14 @@ export const vendors: readonly VendorInfo[] = [
   {
     id: "kaseya_uniview",
     name: "Kaseya UniView (Unitrends)",
-    summary: "Appliances, protected assets and backup jobs",
-    availability: "planned",
+    summary: "Customers, the assets their Unitrends appliances protect, and each backup",
+    availability: "available",
   },
   {
     id: "veeam_vspc",
     name: "Veeam Service Provider Console",
-    summary: "Companies, protected workloads and job sessions",
-    availability: "planned",
+    summary: "Companies, VMs in backup jobs, and computers with Veeam agents",
+    availability: "available",
   },
   {
     id: "mock",

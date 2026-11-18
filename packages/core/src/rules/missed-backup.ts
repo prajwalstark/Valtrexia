@@ -7,6 +7,36 @@ const MINUTE_MS = 60 * 1000;
 /** A sync is trusted for this many sync intervals after it last succeeded. */
 export const STALE_SYNC_AFTER_INTERVALS = 3;
 
+/** Why an asset is deliberately not being judged, or null if it is being watched. */
+export function watchSuppression(
+  asset: { mutedUntil: Date | null; isPaused: boolean; isArchived: boolean },
+  now: Date,
+): "archived" | "paused" | "muted" | null {
+  if (asset.isArchived) return "archived";
+  if (asset.isPaused) return "paused";
+  if (asset.mutedUntil && asset.mutedUntil.getTime() > now.getTime()) return "muted";
+  return null;
+}
+
+/**
+ * Why an integration's data is too old to judge an asset by, or null if it is
+ * current. Shared by every rule that reasons from the absence of a backup:
+ * absence proves nothing when we have not been able to look.
+ */
+export function vendorDataProblem(
+  integration: { syncStatus: "never" | "running" | "ok" | "error"; lastSyncAt: Date | null },
+  now: Date,
+  syncIntervalMinutes: number,
+): "never_synced" | "sync_failing" | "sync_stale" | null {
+  if (!(syncIntervalMinutes > 0) || !Number.isFinite(syncIntervalMinutes)) {
+    throw new RangeError("syncIntervalMinutes must be a positive number");
+  }
+  if (integration.lastSyncAt === null) return "never_synced";
+  if (integration.syncStatus === "error") return "sync_failing";
+  const staleAfterMs = STALE_SYNC_AFTER_INTERVALS * syncIntervalMinutes * MINUTE_MS;
+  return now.getTime() - integration.lastSyncAt.getTime() > staleAfterMs ? "sync_stale" : null;
+}
+
 export interface MissedBackupInput {
   now: Date;
   asset: {
@@ -39,10 +69,24 @@ export type MissedBackupVerdict =
   /** The asset is deliberately not being watched. Close any open incident. */
   | { state: "suppressed"; reason: "archived" | "paused" | "muted" }
   /**
-   * We cannot tell. The vendor data is missing or out of date, so the absence
-   * of a backup proves nothing. Leave any open incident exactly as it is.
+   * We cannot tell, and it does not matter yet. The vendor data is missing or
+   * out of date, but the asset's last known backup is still inside its window.
+   * Leave any open incident exactly as it is.
    */
-  | { state: "indeterminate"; reason: "never_synced" | "sync_failing" | "sync_stale" };
+  | { state: "indeterminate"; reason: "never_synced" | "sync_failing" | "sync_stale" }
+  /**
+   * We cannot tell, and by now we should have heard. The window has closed
+   * and the vendor data is too old to say whether a backup happened. That is
+   * not evidence of a missed backup, so no incident is opened; but the asset
+   * must stop being shown as backed up. Leave any open incident as it is.
+   */
+  | {
+      state: "unconfirmed";
+      reason: "sync_failing" | "sync_stale";
+      deadline: Date;
+      /** The last time the vendor was read successfully: what we know dates from then. */
+      lastSyncAt: Date;
+    };
 
 /**
  * Decides whether an asset has missed a backup.
@@ -52,9 +96,10 @@ export type MissedBackupVerdict =
  *
  * Two things take precedence over that arithmetic. An asset that is archived,
  * paused or muted is not judged at all. And if the integration's own sync is
- * failing or out of date, the verdict is "indeterminate" rather than "missed":
- * otherwise a vendor outage would raise a missed-backup incident on every
- * asset that vendor protects.
+ * failing or out of date, the verdict is never "missed": otherwise a vendor
+ * outage would raise a missed-backup incident on every asset that vendor
+ * protects. It is "indeterminate" while the asset's last known backup is
+ * still inside its window, and "unconfirmed" once the window has closed.
  */
 export function evaluateMissedBackup(input: MissedBackupInput): MissedBackupVerdict {
   const { now, asset, graceHours, integration, syncIntervalMinutes } = input;
@@ -65,29 +110,27 @@ export function evaluateMissedBackup(input: MissedBackupInput): MissedBackupVerd
   if (!(graceHours >= 0) || !Number.isFinite(graceHours)) {
     throw new RangeError("graceHours must be zero or a positive number");
   }
-  if (!(syncIntervalMinutes > 0) || !Number.isFinite(syncIntervalMinutes)) {
-    throw new RangeError("syncIntervalMinutes must be a positive number");
-  }
+  const outOfDate = vendorDataProblem(integration, now, syncIntervalMinutes);
 
-  if (asset.isArchived) return { state: "suppressed", reason: "archived" };
-  if (asset.isPaused) return { state: "suppressed", reason: "paused" };
-  if (asset.mutedUntil && asset.mutedUntil.getTime() > now.getTime()) {
-    return { state: "suppressed", reason: "muted" };
-  }
+  const suppressed = watchSuppression(asset, now);
+  if (suppressed) return { state: "suppressed", reason: suppressed };
 
-  if (integration.lastSyncAt === null) return { state: "indeterminate", reason: "never_synced" };
-  if (integration.syncStatus === "error") return { state: "indeterminate", reason: "sync_failing" };
-  const staleAfterMs = STALE_SYNC_AFTER_INTERVALS * syncIntervalMinutes * MINUTE_MS;
-  if (now.getTime() - integration.lastSyncAt.getTime() > staleAfterMs) {
-    return { state: "indeterminate", reason: "sync_stale" };
+  if (outOfDate === "never_synced" || integration.lastSyncAt === null) {
+    return { state: "indeterminate", reason: "never_synced" };
   }
 
   const reference = asset.lastCompletedAt ?? asset.firstSeenAt;
   const deadline = new Date(
     reference.getTime() + (asset.expectedFrequencyHours + graceHours) * HOUR_MS,
   );
-
   const overdueMs = now.getTime() - deadline.getTime();
+
+  if (outOfDate) {
+    return overdueMs > 0
+      ? { state: "unconfirmed", reason: outOfDate, deadline, lastSyncAt: integration.lastSyncAt }
+      : { state: "indeterminate", reason: outOfDate };
+  }
+
   if (overdueMs > 0) {
     return { state: "missed", deadline, hoursOverdue: overdueMs / HOUR_MS };
   }
@@ -109,4 +152,23 @@ export function deriveCurrentStatus(
   const latest: BackupStatus = latestResultStatus ?? "unknown";
   if (verdict.state !== "missed") return latest;
   return worstStatus([latest, "missed"]) ?? "missed";
+}
+
+/**
+ * The status to show for an asset right now, given the status stored at the
+ * last successful sync and a verdict computed from the integration's present
+ * state.
+ *
+ * The stored status is only as fresh as that sync. When the verdict is
+ * "unconfirmed", an asset stored as backed up or running is shown as
+ * `unknown`. A stored failure, missed backup or warning is kept: not being
+ * able to look never makes an asset look better than it last was.
+ *
+ * This is applied when reading, not written back by a background job, so it
+ * still holds when the worker that would have done the writing is the thing
+ * that has stopped.
+ */
+export function statusInView(stored: BackupStatus, verdict: MissedBackupVerdict): BackupStatus {
+  if (verdict.state !== "unconfirmed") return stored;
+  return worstStatus([stored, "unknown"]) ?? "unknown";
 }

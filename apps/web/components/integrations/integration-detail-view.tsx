@@ -18,6 +18,8 @@ export function IntegrationDetailView({
   integration,
   canManage,
   now,
+  syncIntervalMinutes,
+  timeZone,
   justConnected = false,
   testSlot,
   replaceSlot,
@@ -26,6 +28,8 @@ export function IntegrationDetailView({
   integration: IntegrationSummary;
   canManage: boolean;
   now: Date;
+  syncIntervalMinutes: number;
+  timeZone: string;
   justConnected?: boolean;
   testSlot?: ReactNode;
   replaceSlot?: ReactNode;
@@ -57,12 +61,17 @@ export function IntegrationDetailView({
         <dt className="text-subtle-foreground">Vendor</dt>
         <dd>{vendor.name}</dd>
         <dt className="text-subtle-foreground">Keys</dt>
-        <dd>{keyHint(integration.credentialHint) ?? "Stored encrypted"}</dd>
+        <dd>{keyHint(integration.vendor, integration.credentialHint) ?? "Stored encrypted"}</dd>
         <dt className="text-subtle-foreground">Connected</dt>
-        <dd>{formatDate(integration.createdAt)}</dd>
+        <dd>{formatDate(integration.createdAt, timeZone)}</dd>
         <dt className="text-subtle-foreground">Sync</dt>
         <dd>
-          <SyncStatus state={integration} now={now} />
+          <SyncStatus
+            state={integration}
+            now={now}
+            syncIntervalMinutes={syncIntervalMinutes}
+            timeZone={timeZone}
+          />
         </dd>
       </dl>
 

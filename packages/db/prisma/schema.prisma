@@ -53,13 +53,72 @@ enum SyncStatus {
   @@map("sync_status")
 }
 
+/// Why a sync failed. Mirrors SYNC_ERROR_KINDS in packages/core.
+enum SyncErrorKind {
+  auth
+  credentials
+  rate_limited
+  network
+  vendor
+  invalid_response
+  unavailable
+  internal
+
+  @@map("sync_error_kind")
+}
+
 enum IncidentType {
   failed
   missed
-  /// Reserved for the SLA rule; not raised in Phase 1.
+  /// Longer than the asset's SLA without a completed backup.
   stale
 
   @@map("incident_type")
+}
+
+enum NotificationChannelType {
+  webhook
+  email
+
+  @@map("notification_channel_type")
+}
+
+/// What one message to a channel is about.
+enum NotificationBatchKind {
+  /// Incidents that opened or closed in one sync.
+  incidents
+  /// An integration became unhealthy, or recovered.
+  integration
+  /// A test message someone asked for.
+  test
+
+  @@map("notification_batch_kind")
+}
+
+enum NotificationBatchStatus {
+  pending
+  sent
+  /// Every attempt failed. Not tried again.
+  failed
+
+  @@map("notification_batch_status")
+}
+
+enum IncidentEvent {
+  opened
+  closed
+
+  @@map("incident_event")
+}
+
+/// Why a workspace is waiting to be deleted.
+enum TenantDeletionReason {
+  /// Its organization was deleted in Clerk.
+  organization_deleted
+  /// An owner asked for it in workspace settings.
+  owner_request
+
+  @@map("tenant_deletion_reason")
 }
 
 enum UserRole {
@@ -78,22 +137,32 @@ enum ActorType {
 
 /// One managed service provider. Maps 1:1 to a Clerk organization.
 model Tenant {
-  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  clerkOrgId String   @unique @map("clerk_org_id")
-  name       String
+  id                  String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clerkOrgId          String                @unique @map("clerk_org_id")
+  name                String
   /// Hours added to an asset's expected frequency before it counts as missed.
-  graceHours Int      @default(2) @map("grace_hours")
-  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  graceHours          Int                   @default(2) @map("grace_hours")
+  /// IANA time zone the workspace reads dates and days in. Everything is stored in UTC.
+  timeZone            String                @default("UTC") @map("time_zone")
+  /// Set when the workspace is to be deleted. Syncing and notifications stop at once.
+  deletionRequestedAt DateTime?             @map("deletion_requested_at") @db.Timestamptz(3)
+  /// When its data is deleted: the end of the hold.
+  deleteAfter         DateTime?             @map("delete_after") @db.Timestamptz(3)
+  deletionReason      TenantDeletionReason? @map("deletion_reason")
+  createdAt           DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  users                User[]
-  integrations         Integration[]
-  clients              Client[]
-  vendorClientMappings VendorClientMapping[]
-  assets               Asset[]
-  backupResults        BackupResult[]
-  incidents            Incident[]
-  auditLogs            AuditLog[]
+  users                  User[]
+  integrations           Integration[]
+  clients                Client[]
+  vendorClientMappings   VendorClientMapping[]
+  assets                 Asset[]
+  backupResults          BackupResult[]
+  incidents              Incident[]
+  auditLogs              AuditLog[]
+  notificationChannels   NotificationChannel[]
+  notificationBatches    NotificationBatch[]
+  notificationDeliveries NotificationDelivery[]
 
   @@map("tenants")
 }
@@ -113,6 +182,7 @@ model User {
 
   tenant                Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   acknowledgedIncidents Incident[]
+  mutedAssets           Asset[]
   auditLogs             AuditLog[]
 
   @@unique([tenantId, clerkUserId])
@@ -122,21 +192,29 @@ model User {
 
 /// A connection to one vendor account.
 model Integration {
-  id                String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  tenantId          String     @map("tenant_id") @db.Uuid
-  vendor            Vendor
-  name              String
+  id                  String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId            String         @map("tenant_id") @db.Uuid
+  vendor              Vendor
+  name                String
   /// Envelope-encrypted credentials. Never selected for the browser.
-  credentialsEnc    Json       @map("credentials_enc")
+  credentialsEnc      Json           @map("credentials_enc")
   /// Last characters of the public key: the only credential-derived value shown in the UI.
-  credentialHint    String?    @map("credential_hint")
-  lastSyncAt        DateTime?  @map("last_sync_at") @db.Timestamptz(3)
-  lastSyncStartedAt DateTime?  @map("last_sync_started_at") @db.Timestamptz(3)
-  syncStatus        SyncStatus @default(never) @map("sync_status")
+  credentialHint      String?        @map("credential_hint")
+  lastSyncAt          DateTime?      @map("last_sync_at") @db.Timestamptz(3)
+  lastSyncStartedAt   DateTime?      @map("last_sync_started_at") @db.Timestamptz(3)
+  syncStatus          SyncStatus     @default(never) @map("sync_status")
   /// Sanitized, human-readable reason for the last failed sync.
-  lastSyncError     String?    @map("last_sync_error")
-  createdAt         DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt         DateTime   @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  lastSyncError       String?        @map("last_sync_error")
+  /// What sort of failure that was. Decides whether retrying can help.
+  lastSyncErrorKind   SyncErrorKind? @map("last_sync_error_kind")
+  /// Failed syncs in a row. Zero after any successful sync.
+  consecutiveFailures Int            @default(0) @map("consecutive_failures")
+  /// When the current run of failures began. Null when the last sync succeeded.
+  failingSince        DateTime?      @map("failing_since") @db.Timestamptz(3)
+  /// When it was reported unhealthy. Cleared by the next successful sync, which reports the recovery.
+  unhealthySince      DateTime?      @map("unhealthy_since") @db.Timestamptz(3)
+  createdAt           DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   tenant               Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   vendorClientMappings VendorClientMapping[]
@@ -201,6 +279,10 @@ model Asset {
   expectedFrequencyHours Int           @default(24) @map("expected_frequency_hours")
   slaHours               Int           @default(72) @map("sla_hours")
   mutedUntil             DateTime?     @map("muted_until") @db.Timestamptz(3)
+  /// Why it was muted, in the words of whoever muted it. Kept while the mute stands.
+  mutedReason            String?       @map("muted_reason")
+  mutedByUserId          String?       @map("muted_by_user_id") @db.Uuid
+  mutedAt                DateTime?     @map("muted_at") @db.Timestamptz(3)
   isPaused               Boolean       @default(false) @map("is_paused")
   isArchived             Boolean       @default(false) @map("is_archived")
   firstSeenAt            DateTime      @default(now()) @map("first_seen_at") @db.Timestamptz(3)
@@ -214,12 +296,15 @@ model Asset {
   /// When the last completed backup finished. A warning counts as completed.
   lastSuccessAt          DateTime?     @map("last_success_at") @db.Timestamptz(3)
   currentStatus          BackupStatus  @default(unknown) @map("current_status")
+  /// When the asset went past its SLA without a completed backup. Null while inside it.
+  staleSince             DateTime?     @map("stale_since") @db.Timestamptz(3)
   createdAt              DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt              DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   client        Client         @relation(fields: [tenantId, clientId], references: [tenantId, id], onDelete: Cascade)
   integration   Integration    @relation(fields: [tenantId, integrationId], references: [tenantId, id], onDelete: Cascade)
+  mutedBy       User?          @relation(fields: [tenantId, mutedByUserId], references: [tenantId, id], onDelete: NoAction)
   backupResults BackupResult[]
   incidents     Incident[]
 
@@ -257,6 +342,8 @@ model BackupResult {
 
   @@unique([assetId, vendorResultId])
   @@index([tenantId, assetId, startedAt(sort: Desc)])
+  /// For the retention job, which works across tenants by age.
+  @@index([startedAt])
   @@map("backup_results")
 }
 
@@ -278,6 +365,9 @@ model Incident {
   asset          Asset  @relation(fields: [tenantId, assetId], references: [tenantId, id], onDelete: Cascade)
   acknowledgedBy User?  @relation(fields: [tenantId, acknowledgedByUserId], references: [tenantId, id], onDelete: NoAction)
 
+  notificationDeliveries NotificationDelivery[]
+
+  @@unique([tenantId, id])
   @@index([tenantId, closedAt])
   @@index([tenantId, assetId])
   @@map("incidents")
@@ -303,5 +393,101 @@ model AuditLog {
   actor  User?  @relation(fields: [tenantId, actorUserId], references: [tenantId, id], onDelete: NoAction)
 
   @@index([tenantId, createdAt(sort: Desc)])
+  /// For the retention job, which works across tenants by age.
+  @@index([createdAt])
   @@map("audit_logs")
+}
+
+/// Somewhere notifications are sent: a webhook endpoint or a set of email
+/// recipients, with what it wants to be told about.
+model NotificationChannel {
+  id                      String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId                String                  @map("tenant_id") @db.Uuid
+  type                    NotificationChannelType
+  name                    String
+  enabled                 Boolean                 @default(true)
+  /// Incident types it is told about.
+  incidentTypes           IncidentType[]          @map("incident_types")
+  notifyOpened            Boolean                 @default(true) @map("notify_opened")
+  notifyClosed            Boolean                 @default(true) @map("notify_closed")
+  notifyIntegrationHealth Boolean                 @default(true) @map("notify_integration_health")
+  /// What may be shown in the interface: a hint of the destination, never the destination itself.
+  config                  Json                    @default("{}")
+  /// Envelope-encrypted destination and signing secret. Never selected for the browser. Null for email.
+  secretEnc               Json?                   @map("secret_enc")
+  createdAt               DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt               DateTime                @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant     Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  batches    NotificationBatch[]
+  deliveries NotificationDelivery[]
+
+  @@unique([tenantId, name])
+  @@unique([tenantId, id])
+  @@map("notification_channels")
+}
+
+/// One message to one channel, waiting to be sent or already sent. Written in
+/// the same transaction as the change it reports, so the two cannot disagree.
+model NotificationBatch {
+  id            String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId      String                  @map("tenant_id") @db.Uuid
+  channelId     String                  @map("channel_id") @db.Uuid
+  kind          NotificationBatchKind
+  /// What the message says, captured when it was written. Never credentials or vendor payloads.
+  payload       Json
+  status        NotificationBatchStatus @default(pending)
+  /// Attempts made so far.
+  attempts      Int                     @default(0)
+  nextAttemptAt DateTime                @default(now()) @map("next_attempt_at") @db.Timestamptz(3)
+  /// Sanitized reason the last attempt failed.
+  lastError     String?                 @map("last_error")
+  sentAt        DateTime?               @map("sent_at") @db.Timestamptz(3)
+  createdAt     DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime                @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant     Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  channel    NotificationChannel    @relation(fields: [tenantId, channelId], references: [tenantId, id], onDelete: Cascade)
+  deliveries NotificationDelivery[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, channelId, createdAt(sort: Desc)])
+  @@map("notification_batches")
+}
+
+/// That a channel has been told about one event of one incident. The unique
+/// key is the guarantee that it is never told twice, whatever a retry or a
+/// crash does.
+model NotificationDelivery {
+  id         String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String        @map("tenant_id") @db.Uuid
+  channelId  String        @map("channel_id") @db.Uuid
+  incidentId String        @map("incident_id") @db.Uuid
+  event      IncidentEvent
+  batchId    String        @map("batch_id") @db.Uuid
+  createdAt  DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant   Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  channel  NotificationChannel @relation(fields: [tenantId, channelId], references: [tenantId, id], onDelete: Cascade)
+  incident Incident            @relation(fields: [tenantId, incidentId], references: [tenantId, id], onDelete: Cascade)
+  batch    NotificationBatch   @relation(fields: [tenantId, batchId], references: [tenantId, id], onDelete: Cascade)
+
+  @@unique([incidentId, event, channelId])
+  @@index([tenantId, batchId])
+  @@map("notification_deliveries")
+}
+
+/// A workspace that was deleted. Kept outside any tenant, because the
+/// tenant's own audit log is deleted with it. Not readable by the runtime role.
+model TenantDeletion {
+  id              String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// The deleted tenant's id. Not a foreign key: the tenant no longer exists.
+  deletedTenantId String               @map("deleted_tenant_id") @db.Uuid
+  clerkOrgId      String               @map("clerk_org_id")
+  tenantName      String               @map("tenant_name")
+  reason          TenantDeletionReason
+  requestedAt     DateTime             @map("requested_at") @db.Timestamptz(3)
+  deletedAt       DateTime             @default(now()) @map("deleted_at") @db.Timestamptz(3)
+
+  @@map("tenant_deletions")
 }

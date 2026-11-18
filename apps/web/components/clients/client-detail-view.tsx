@@ -1,8 +1,8 @@
-import { ChevronDown, ChevronLeft } from "lucide-react";
+import { ChevronDown, ChevronLeft, ClockAlert } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { PageHeader } from "@/components/shell/page-header";
-import { HealthBadge, STATUS_META, StatusBadge } from "@/components/status/status";
+import { HealthBadge, INCIDENT_META, STATUS_META, StatusBadge } from "@/components/status/status";
 import {
   HISTORY_DAYS,
   type ClientAsset,
@@ -10,26 +10,27 @@ import {
   type OpenIncident,
 } from "@/lib/dashboard-core";
 import { describeClient } from "@/lib/describe";
-import { count, formatDate, formatDateTime, timeAgo } from "@/lib/format";
+import { count, elapsed, formatDate, formatDateTime, timeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { DayStrip, DayStripLegend } from "./day-strip";
-
-const INCIDENT_LABEL: Record<OpenIncident["type"], string> = {
-  failed: "Backup failed",
-  missed: "Backup missed",
-  stale: "Backup overdue",
-};
 
 export function ClientDetailView({
   client,
   now,
   acknowledgeSlot,
+  assetSettingsSlot,
+  clientSettingsSlot,
 }: {
   client: ClientDetail;
   now: Date;
   /** Renders the acknowledge control for an incident. A slot keeps this a server component. */
   acknowledgeSlot: (incident: OpenIncident) => ReactNode;
+  /** Renders the settings of one asset, shown when its row is opened. */
+  assetSettingsSlot: (asset: ClientAsset) => ReactNode;
+  /** Renders the settings that apply to every asset of the client. */
+  clientSettingsSlot: ReactNode;
 }) {
+  const { timeZone } = client;
   const watched = client.assets.filter((asset) => asset.watched);
   const unwatched = client.assets.filter((asset) => !asset.watched);
 
@@ -57,7 +58,7 @@ export function ClientDetailView({
           </h2>
           <ul className="mt-4 divide-y divide-line border-y border-line">
             {client.openIncidents.map((incident) => {
-              const meta = STATUS_META[incident.type === "failed" ? "failed" : "missed"];
+              const meta = INCIDENT_META[incident.type];
               const Icon = meta.icon;
               return (
                 <li
@@ -67,17 +68,16 @@ export function ClientDetailView({
                   <p className="flex items-center gap-2">
                     <Icon aria-hidden="true" className={cn("size-4 shrink-0", meta.tone)} />
                     <span>
-                      <span className="font-medium">{INCIDENT_LABEL[incident.type]}</span> on{" "}
-                      {incident.assetName}
+                      <span className="font-medium">{meta.label}</span> on {incident.assetName}
                       <span className="text-subtle-foreground">
-                        , open since {timeAgo(incident.openedAt, now)}
+                        , open since {timeAgo(incident.openedAt, now, timeZone)}
                       </span>
                     </span>
                   </p>
                   {incident.acknowledgedAt ? (
                     <p className="text-sm text-muted-foreground">
                       Acknowledged by {incident.acknowledgedBy ?? "a team member"}{" "}
-                      {timeAgo(incident.acknowledgedAt, now)}
+                      {timeAgo(incident.acknowledgedAt, now, timeZone)}
                     </p>
                   ) : (
                     acknowledgeSlot(incident)
@@ -100,7 +100,8 @@ export function ClientDetailView({
               Assets
             </h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Worst first. Each square is one day of the last {HISTORY_DAYS}, in UTC, showing that
+              Worst first. Each square is one day of the last {HISTORY_DAYS}, in{" "}
+              {timeZone === "UTC" ? "UTC" : `${timeZone.replaceAll("_", " ")} time`}, showing that
               day’s worst result. Open an asset for its individual backups.
             </p>
           </div>
@@ -112,29 +113,59 @@ export function ClientDetailView({
             No protected assets have been found for this client yet.
           </p>
         ) : (
-          <ul className="mt-5 divide-y divide-line border-y border-line">
-            {watched.map((asset) => (
-              <AssetRow key={asset.id} asset={asset} now={now} />
-            ))}
-            {unwatched.map((asset) => (
-              <AssetRow key={asset.id} asset={asset} now={now} />
-            ))}
-          </ul>
+          <>
+            {client.settableAssets > 0 ? (
+              <details className="group/all mt-5 rounded-md border border-line">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-4 px-3 py-2.5 text-sm font-medium hover:bg-surface [&::-webkit-details-marker]:hidden">
+                  Settings for all assets
+                  <ChevronDown
+                    aria-hidden="true"
+                    className="size-4 text-subtle-foreground group-open/all:rotate-180"
+                  />
+                </summary>
+                <div className="border-t border-line px-3 py-4">{clientSettingsSlot}</div>
+              </details>
+            ) : null}
+            <ul className="mt-5 divide-y divide-line border-y border-line">
+              {/* One list, so a row that moves when it is muted keeps its place
+                  in the page's state: it stays open and shows the result. */}
+              {[...watched, ...unwatched].map((asset) => (
+                <AssetRow
+                  key={asset.id}
+                  asset={asset}
+                  now={now}
+                  timeZone={timeZone}
+                  settings={assetSettingsSlot(asset)}
+                />
+              ))}
+            </ul>
+          </>
         )}
       </section>
     </>
   );
 }
 
-function notWatchedReason(asset: ClientAsset): string | null {
+function notWatchedReason(asset: ClientAsset, timeZone: string): string | null {
   if (asset.isArchived) return "Archived";
   if (asset.isPaused) return "Paused";
-  if (!asset.watched && asset.mutedUntil) return `Muted until ${formatDate(asset.mutedUntil)}`;
+  if (asset.mute)
+    return asset.mute.until ? `Muted until ${formatDate(asset.mute.until, timeZone)}` : "Muted";
   return null;
 }
 
-function AssetRow({ asset, now }: { asset: ClientAsset; now: Date }) {
-  const reason = notWatchedReason(asset);
+function AssetRow({
+  asset,
+  now,
+  timeZone,
+  settings,
+}: {
+  asset: ClientAsset;
+  now: Date;
+  timeZone: string;
+  settings: ReactNode;
+}) {
+  const reason = notWatchedReason(asset, timeZone);
   const meta = [asset.type, asset.deviceName, asset.integrationName].filter(Boolean).join(", ");
 
   return (
@@ -164,8 +195,22 @@ function AssetRow({ asset, now }: { asset: ClientAsset; now: Date }) {
 
           <p className="col-start-1 row-start-3 text-sm text-muted-foreground lg:col-start-3 lg:row-start-1">
             {asset.lastSuccessAt
-              ? `Last backup ${timeAgo(asset.lastSuccessAt, now)}`
+              ? `Last backup ${timeAgo(asset.lastSuccessAt, now, timeZone)}`
               : "Never backed up"}
+            {asset.staleSince ? (
+              <span className="flex items-start gap-1 text-foreground">
+                <ClockAlert
+                  aria-hidden="true"
+                  className="mt-[3px] size-3.5 shrink-0 text-status-critical"
+                />
+                {elapsed(asset.staleSince, now)} past its {asset.slaHours}-hour SLA
+              </span>
+            ) : null}
+            {asset.unconfirmedSince ? (
+              <span className="block text-subtle-foreground">
+                No vendor data since {formatDateTime(asset.unconfirmedSince, timeZone)}
+              </span>
+            ) : null}
             {asset.currentStatus === "missed" && asset.lastResultStatus ? (
               <span className="block text-subtle-foreground">
                 Last result: {STATUS_META[asset.lastResultStatus].label.toLowerCase()}
@@ -219,7 +264,7 @@ function AssetRow({ asset, now }: { asset: ClientAsset; now: Date }) {
                     {asset.results.map((result) => (
                       <tr key={result.id}>
                         <td className="py-1.5 pr-4 whitespace-nowrap tabular-nums">
-                          {formatDateTime(result.startedAt)}
+                          {formatDateTime(result.startedAt, timeZone)}
                         </td>
                         <td className="py-1.5 pr-4">
                           <StatusBadge status={result.status} />
@@ -247,6 +292,9 @@ function AssetRow({ asset, now }: { asset: ClientAsset; now: Date }) {
                 </p>
               ) : null}
             </>
+          )}
+          {asset.isArchived ? null : (
+            <div className="mt-6 border-t border-line/60 pt-5">{settings}</div>
           )}
         </div>
       </details>

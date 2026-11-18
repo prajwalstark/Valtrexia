@@ -1,5 +1,5 @@
 import { SYNC_INTERVAL_MINUTES } from "@valtrexia/core";
-import { CircleAlert, CircleCheck, CircleDashed } from "lucide-react";
+import { CircleAlert, CircleCheck, CircleDashed, ClockAlert } from "lucide-react";
 import Link from "next/link";
 import { STATUS_META } from "@/components/status/status";
 import type { FleetOverview } from "@/lib/dashboard-core";
@@ -12,8 +12,12 @@ import { cn } from "@/lib/utils";
  * data is. It is the product's tagline made literal.
  */
 export function Sightline({ overview, now }: { overview: FleetOverview; now: Date }) {
-  const { assets, integrations } = overview;
-  const attention = (["failed", "missed", "warning"] as const).filter((s) => assets.counts[s] > 0);
+  const { assets, integrations, timeZone } = overview;
+  // Unknown is listed too: an asset whose backup cannot be confirmed must
+  // never be folded into "all backed up".
+  const attention = (["failed", "missed", "warning", "unknown"] as const).filter(
+    (s) => assets.counts[s] > 0,
+  );
 
   let left;
   if (integrations.total === 0) {
@@ -56,6 +60,13 @@ export function Sightline({ overview, now }: { overview: FleetOverview; now: Dat
           );
         })}
         <li className="text-subtle-foreground">of {count(assets.watched, "asset")}</li>
+        {assets.pastSla > 0 ? (
+          <li className="inline-flex items-center gap-1.5">
+            <ClockAlert aria-hidden="true" className="size-4 text-status-critical" />
+            <span className="font-semibold tabular-nums">{assets.pastSla}</span>
+            <span className="text-muted-foreground">past SLA</span>
+          </li>
+        ) : null}
       </ul>
     );
   }
@@ -69,8 +80,18 @@ export function Sightline({ overview, now }: { overview: FleetOverview; now: Dat
         <CircleAlert aria-hidden="true" className="size-4 text-status-critical" />
         {count(integrations.failing, "integration")} failing to sync
       </Link>
+    ) : integrations.stalled > 0 ? (
+      <Link
+        href="/integrations"
+        className="inline-flex items-center gap-1.5 rounded-md hover:text-foreground"
+      >
+        <CircleAlert aria-hidden="true" className="size-4 text-status-critical" />
+        {integrations.lastSyncAt
+          ? `Syncs have stopped. Last data ${timeAgo(integrations.lastSyncAt, now, timeZone)}`
+          : "Syncs are not running"}
+      </Link>
     ) : integrations.lastSyncAt ? (
-      <span>Last synced {timeAgo(integrations.lastSyncAt, now)}</span>
+      <span>Last synced {timeAgo(integrations.lastSyncAt, now, timeZone)}</span>
     ) : (
       <span>Backups are checked every {SYNC_INTERVAL_MINUTES} minutes</span>
     );
