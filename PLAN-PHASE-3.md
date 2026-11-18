@@ -1,6 +1,6 @@
 # Phase 3 plan
 
-Status: **proposed, waiting for approval.** Branch: `phase-3`, cut from `main` after the Phase 2 merge (`78af022`). Progress will be recorded in section 10.
+Status: **approved** ("go with your recommendations"). Branch: `phase-3`, cut from `main` after the Phase 2 merge (`78af022`). Progress will be recorded in section 10.
 
 Phase 1's plan stays in `PLAN.md` and Phase 2's in `PLAN-PHASE-2.md`, as the record of what was built.
 
@@ -177,4 +177,17 @@ Each step's report will say which of its claims are tested and which are assumed
 
 ## 10. Progress
 
-Not started.
+| #   | Step                 | State | Notes                                                                                                               |
+| --- | -------------------- | ----- | ------------------------------------------------------------------------------------------------------------------- |
+| 1   | Deployment packaging | Done  | Images built and run as production would, locally and in CI; the AWS guide is written but not yet followed for real |
+
+Changes made during the build:
+
+- **Decisions 1 to 11 are taken as recommended.** Decision 1 (email provider) and decision 6 (which PSA) still need your account or choice before steps 2 and 7. Decision 11 (Clerk keys) is unchanged.
+- **The Clerk publishable key is read at run time**, as `CLERK_PUBLISHABLE_KEY` (the old `NEXT_PUBLIC_` name still works). Before, it was baked into the build, so each environment would have needed its own image. The build now needs no keys at all.
+- **Prisma's migration engine does not verify certificates under `sslmode=verify-full`.** Found by connecting to a test server whose certificate nothing trusted: it connected. It does verify under `sslmode=require&sslaccept=strict`. The migrate image refuses any owner URL without those, and the guide gives the right form. The apps use the Node driver, which does verify under `verify-full`.
+- **Amazon RDS's certificate authority is not trusted by default.** The guide adds AWS's bundle to the images in a two-line derived image, read through `NODE_EXTRA_CA_CERTS` by the apps and through `sslcert` by the migration engine.
+- **The migrate image is built on the full Node image, not the slim one.** Prisma's migration engine needs OpenSSL, which the slim image lacks, and picks its build by the OpenSSL it finds at install time. On the slim image it fetched the wrong one.
+- **The worker runs its TypeScript through `tsx`**, now a runtime dependency of the worker at the version the repository already used. No build step for the worker.
+- **The worker image is larger than it needs to be** (about 800 MB): Prisma's CLI comes along as a peer dependency of its client. Harmless; trimming it is left for later.
+- **Images were built and run here**, not only in CI: a Docker daemon could be started in this environment, and the smoke test passed locally before it ran in CI.

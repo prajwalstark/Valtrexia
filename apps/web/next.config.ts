@@ -29,6 +29,11 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  // A self-contained server (.next/standalone) with only the files it needs,
+  // for the container image. Traced from the repository root, so the
+  // workspace packages and pnpm's linked dependencies are found.
+  output: "standalone",
+  outputFileTracingRoot: join(import.meta.dirname, "..", ".."),
   // Workspace packages ship TypeScript source, so Next compiles them.
   transpilePackages: ["@valtrexia/core", "@valtrexia/db", "@valtrexia/connectors"],
   poweredByHeader: false,

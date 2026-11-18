@@ -19,6 +19,35 @@ const logger = createLogger({ name: "web" });
 const CONNECTION_TESTS = { name: "connection-test", limit: 10, windowMs: 60_000 };
 
 let connectionTestLimiter: RateLimiter | undefined;
+let redisClient: Redis | undefined;
+
+/**
+ * This server's Redis connection, or null when REDIS_URL is not set, which is
+ * allowed in development only. Created on first use, and shared.
+ */
+function getRedis(): Redis | null {
+  if (redisClient) return redisClient;
+  const url = process.env.REDIS_URL;
+  if (!url) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("REDIS_URL is not set. The web app needs Redis in production.");
+    }
+    return null;
+  }
+  assertProductionTransport(process.env, { redis: true });
+  redisClient = new Redis(url, {
+    lazyConnect: true,
+    // Fail a command within seconds rather than queueing it while Redis is away.
+    maxRetriesPerRequest: 1,
+    commandTimeout: 2_000,
+    connectTimeout: 2_000,
+  });
+  // Without a listener a connection error would crash the process. The URL is never logged.
+  redisClient.on("error", (error: Error) =>
+    logger.warn({ errorName: error.name }, "Redis connection failed"),
+  );
+  return redisClient;
+}
 
 /**
  * Shared through Redis when REDIS_URL is set, so every web instance counts
@@ -27,28 +56,20 @@ let connectionTestLimiter: RateLimiter | undefined;
  */
 function getConnectionTestLimiter(): RateLimiter {
   if (connectionTestLimiter) return connectionTestLimiter;
-  const url = process.env.REDIS_URL;
-  if (!url) {
-    if (process.env.NODE_ENV === "production") {
-      throw new Error("REDIS_URL is not set. The web app needs Redis in production.");
-    }
-    connectionTestLimiter = createRateLimiter(CONNECTION_TESTS);
-    return connectionTestLimiter;
-  }
-  assertProductionTransport(process.env, { redis: true });
-  const redis = new Redis(url, {
-    lazyConnect: true,
-    // Fail a command within seconds rather than queueing it while Redis is away.
-    maxRetriesPerRequest: 1,
-    commandTimeout: 2_000,
-    connectTimeout: 2_000,
-  });
-  // Without a listener a connection error would crash the process. The URL is never logged.
-  redis.on("error", (error: Error) =>
-    logger.warn({ errorName: error.name }, "rate limiter's Redis connection failed"),
-  );
-  connectionTestLimiter = createRedisRateLimiter({ redis, ...CONNECTION_TESTS });
+  const redis = getRedis();
+  connectionTestLimiter = redis
+    ? createRedisRateLimiter({ redis, ...CONNECTION_TESTS })
+    : createRateLimiter(CONNECTION_TESTS);
   return connectionTestLimiter;
+}
+
+/** Pings Redis, for the readiness check. Undefined when this server has no Redis (development). */
+export function redisPing(): (() => Promise<void>) | undefined {
+  const redis = getRedis();
+  if (!redis) return undefined;
+  return async () => {
+    if ((await redis.ping()) !== "PONG") throw new Error("unexpected reply");
+  };
 }
 
 /** What the integrations logic needs, assembled from configuration for one request. */

@@ -5,6 +5,7 @@ import localFont from "next/font/local";
 import { connection } from "next/server";
 import type { ReactNode } from "react";
 import { clerkAppearance } from "@/lib/clerk-appearance";
+import { clerkPublishableKey } from "@/lib/clerk-keys";
 import "./globals.css";
 
 // Archivo, self-hosted (SIL Open Font License, see ./fonts/OFL.txt). One
@@ -31,6 +32,12 @@ export const viewport: Viewport = {
   themeColor: "#0e1630",
 };
 
+/** The key as a prop when it is set; without it, Clerk reports a clear error. */
+function publishableKeyProp(): { publishableKey?: string } {
+  const key = clerkPublishableKey();
+  return key ? { publishableKey: key } : {};
+}
+
 export default async function RootLayout({ children }: { children: ReactNode }) {
   // Every page is rendered per request: the Content-Security-Policy's nonce
   // is new each time, and a page built ahead of time could not carry it, so
@@ -40,6 +47,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
     <ClerkProvider
       // Puts the request's CSP nonce on Clerk's scripts (see lib/csp.ts).
       dynamic
+      {...publishableKeyProp()}
       appearance={clerkAppearance}
       signInUrl="/sign-in"
       signUpUrl="/sign-up"

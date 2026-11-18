@@ -125,6 +125,9 @@ export interface Db {
     { type: EncryptedRecordType; keyId: string | null; records: number }[]
   >;
 
+  /** Resolves when the database answers a trivial query. For readiness checks. */
+  ping(): Promise<void>;
+
   /**
    * Throws unless the connection's role is safe to serve tenants with: not a
    * superuser, unable to bypass row-level security, and not an owner of any
@@ -254,6 +257,10 @@ export function createDb({ url, maxConnections = 10 }: CreateDbOptions): Db {
         keyId: row.key_id,
         records: Number(row.records),
       }));
+    },
+
+    async ping() {
+      await prisma.$queryRaw`SELECT 1`;
     },
 
     async assertSafeRole() {

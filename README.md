@@ -679,27 +679,39 @@ The owner role needs `CREATEDB` to run the database tests, which build and drop 
 3. Save it as a new folder under `packages/db/prisma/migrations`. A new table needs `tenant_id`, a composite key if it has children, grants for `valtrexia_app`, and a `tenant_isolation` policy; copy the pattern from the tenant isolation migration.
 4. Run `pnpm db:migrate`, `pnpm db:generate` and `pnpm test:db`.
 
+## Deployment
+
+Production runs from three container images built by the `Dockerfile` at the root: `web`, `worker` and `migrate`. They run as an unprivileged user on a read-only filesystem, carry no configuration, and require TLS to Postgres and Redis. [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) covers AWS (ECS on Fargate, RDS, ElastiCache, KMS), every environment variable, and the order of a first deployment and of later ones.
+
+- **`GET /api/health`** answers 200 while the web process is up, and checks nothing else.
+- **`GET /api/ready`** answers 200 when the database (as the app role) and Redis respond, and 503 otherwise, naming only which part failed.
+- **The worker** writes a heartbeat to Redis every 30 seconds; `src/scripts/healthcheck.ts` passes while it is under 90 seconds old.
+
+Both endpoints sit outside Clerk's middleware and need no session. CI builds the images and runs them as production would on every push (`docker/smoke/run.sh`).
+
 ## Commands
 
-| Command            | What it does                                                |
-| ------------------ | ----------------------------------------------------------- |
-| `pnpm dev`         | Runs the web app with reload                                |
-| `pnpm build`       | Production build of the web app                             |
-| `pnpm worker:dev`  | Runs the worker with reload                                 |
-| `pnpm typecheck`   | Type-checks every package                                   |
-| `pnpm lint`        | Lints the repository with ESLint                            |
-| `pnpm test`        | Runs every test once (needs Postgres)                       |
-| `pnpm test:unit`   | Runs only the tests that need no services                   |
-| `pnpm test:db`     | Runs only the database tests                                |
-| `pnpm test:watch`  | Runs Vitest in watch mode                                   |
-| `pnpm format`      | Formats the repository with Prettier                        |
-| `pnpm check`       | Type check, lint, tests and format check together           |
-| `pnpm infra:up`    | Starts local Postgres and Redis                             |
-| `pnpm infra:down`  | Stops them (data is kept)                                   |
-| `pnpm db:migrate`  | Applies pending migrations as the owner role                |
-| `pnpm db:check`    | Fails if the migrated database and the Prisma schema differ |
-| `pnpm db:generate` | Regenerates the Prisma client                               |
-| `pnpm db:seed`     | Loads demo data through the real sync pipeline              |
+| Command               | What it does                                                                   |
+| --------------------- | ------------------------------------------------------------------------------ |
+| `pnpm dev`            | Runs the web app with reload                                                   |
+| `pnpm build`          | Production build of the web app                                                |
+| `pnpm worker:dev`     | Runs the worker with reload                                                    |
+| `pnpm typecheck`      | Type-checks every package                                                      |
+| `pnpm lint`           | Lints the repository with ESLint                                               |
+| `pnpm test`           | Runs every test once (needs Postgres)                                          |
+| `pnpm test:unit`      | Runs only the tests that need no services                                      |
+| `pnpm test:db`        | Runs only the database tests                                                   |
+| `pnpm test:watch`     | Runs Vitest in watch mode                                                      |
+| `pnpm format`         | Formats the repository with Prettier                                           |
+| `pnpm check`          | Type check, lint, tests and format check together                              |
+| `pnpm infra:up`       | Starts local Postgres and Redis                                                |
+| `pnpm infra:down`     | Stops them (data is kept)                                                      |
+| `pnpm db:migrate`     | Applies pending migrations as the owner role                                   |
+| `pnpm db:check`       | Fails if the migrated database and the Prisma schema differ                    |
+| `pnpm db:generate`    | Regenerates the Prisma client                                                  |
+| `pnpm db:seed`        | Loads demo data through the real sync pipeline                                 |
+| `pnpm keys:rotate`    | Moves encrypted records to the current key                                     |
+| `docker/smoke/run.sh` | Builds the production images and runs them against TLS-only Postgres and Redis |
 
 ## Continuous integration
 

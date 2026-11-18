@@ -1,4 +1,5 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
+import { clerkPublishableKey } from "@/lib/clerk-keys";
 import { contentSecurityPolicy } from "@/lib/csp";
 
 /**
@@ -32,7 +33,9 @@ export default clerkMiddleware(
   async (auth, request) => {
     if (!isPublicRoute(request)) await auth.protect();
   },
-  {
+  // A function, so the key is read per request at run time, not at build time.
+  () => ({
+    ...(clerkPublishableKey() ? { publishableKey: clerkPublishableKey()! } : {}),
     // Without these, a signed-out visitor is sent to Clerk's hosted sign-in
     // page instead of ours. The same values are set on <ClerkProvider>.
     signInUrl: "/sign-in",
@@ -46,14 +49,15 @@ export default clerkMiddleware(
         "object-src": [...contentSecurityPolicy.directives["object-src"]],
       },
     },
-  },
+  }),
 );
 
 export const config = {
   matcher: [
-    // Everything except Next.js internals and static files.
-    "/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
-    // Always run for API routes.
-    "/(api|trpc)(.*)",
+    // Everything except Next.js internals, static files and the health checks.
+    "/((?!_next|api/health$|api/ready$|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
+    // API routes, except the health checks: those must answer whatever
+    // state Clerk is in, and touch no session.
+    "/(api(?!/health$|/ready$)|trpc)(.*)",
   ],
 };

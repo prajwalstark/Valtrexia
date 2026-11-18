@@ -3,7 +3,9 @@ import { createLogger, LocalKeyProvider, Secret } from "@valtrexia/core/server";
 import { createDb, createIntegration, replaceIntegrationCredentials, type Db } from "@valtrexia/db";
 import { Queue } from "bullmq";
 import pg from "pg";
+import { Redis } from "ioredis";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, inject, it } from "vitest";
+import { heartbeatKey, isHeartbeatFresh } from "./heartbeat";
 import {
   parseSyncJob,
   redisConnection,
@@ -201,6 +203,28 @@ describe("scheduler tick", () => {
       { ...ok, vendor: "mock" },
     ]) {
       expect(() => parseSyncJob(bad)).toThrow();
+    }
+  });
+});
+
+describe("worker heartbeat", () => {
+  it("beats while running, under its own instance id, and stops when closed", async () => {
+    const redis = new Redis(redisUrl);
+    try {
+      const instanceId = `test-${randomUUID()}`;
+      const worker = await start({ instanceId });
+      const key = heartbeatKey(instanceId, prefix);
+      const stored = await redis.get(key);
+      expect(isHeartbeatFresh(stored, Date.now())).toBe(true);
+      expect(Object.keys(JSON.parse(stored!) as object).sort()).toEqual(["at", "startedAt"]);
+      // It expires on its own if the process dies without stopping.
+      expect(await redis.pttl(key)).toBeGreaterThan(0);
+
+      await worker.close();
+      running.splice(running.indexOf(worker), 1);
+      expect(await redis.get(key)).toBeNull();
+    } finally {
+      redis.disconnect();
     }
   });
 });

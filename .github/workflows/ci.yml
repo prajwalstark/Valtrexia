@@ -94,16 +94,31 @@ jobs:
         run: pnpm db:seed
 
       - name: Build the web app
-        # The build needs a publishable key that parses. These are placeholders
-        # that identify no Clerk instance and grant nothing.
-        run: |
-          export NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="pk_test_$(printf 'placeholder.clerk.accounts.dev$' | base64 -w0)"
-          export CLERK_SECRET_KEY="sk_test_placeholder"
-          pnpm build
+        # No keys: the build needs none, so one image serves every environment.
+        run: pnpm build
 
       - name: Service logs
         if: failure()
         run: docker compose logs --no-color --tail 200
+
+  images:
+    name: Container images
+    # Builds the web, worker and migration images and runs them as production
+    # would: read-only, unprivileged, against Postgres and Redis that require
+    # TLS. See docker/smoke/run.sh.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the images and run them as production would
+        run: docker/smoke/run.sh
 
   audit:
     name: Dependency audit

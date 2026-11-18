@@ -7,6 +7,8 @@ import type {
 } from "@valtrexia/core/server";
 import type { Db } from "@valtrexia/db";
 import { Queue, Worker } from "bullmq";
+import { Redis } from "ioredis";
+import { startHeartbeat, workerInstanceId } from "./heartbeat";
 import {
   deliverDueNotifications,
   type DeliveryDeps,
@@ -53,6 +55,8 @@ export interface WorkerOptions {
   retention?: RetentionPolicy;
   /** How often maintenance runs. Default 6 hours. */
   maintenanceEveryHours?: number;
+  /** Names this process in its heartbeat. Default: WORKER_INSTANCE_ID, else the host name. */
+  instanceId?: string;
   /** Redis key prefix. Tests use their own so they never see each other's jobs. */
   prefix?: string;
   /** For tests. */
@@ -94,6 +98,10 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
   const schedulerQueue = new Queue(SCHEDULER_QUEUE, { connection, prefix });
   const notificationQueue = new Queue(NOTIFICATION_QUEUE, { connection, prefix });
   const maintenanceQueue = new Queue(MAINTENANCE_QUEUE, { connection, prefix });
+  const heartbeatRedis = new Redis(options.redisUrl, { maxRetriesPerRequest: 1 });
+  heartbeatRedis.on("error", (error: Error) =>
+    logger.warn({ errorName: error.name }, "heartbeat connection failed"),
+  );
 
   const deliveryDeps: DeliveryDeps = {
     db,
@@ -213,12 +221,19 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
     { name: MAINTENANCE_JOB, opts: { removeOnComplete: true, removeOnFail: 20 } },
   );
 
+  // Started once the queues answer: a heartbeat means this process is working.
+  const heartbeat = startHeartbeat(heartbeatRedis, {
+    instanceId: options.instanceId ?? workerInstanceId(),
+    prefix,
+  });
+
   await Promise.all([
     maintenanceWorker.waitUntilReady(),
     schedulerWorker.waitUntilReady(),
     syncWorker.waitUntilReady(),
     notificationWorker.waitUntilReady(),
   ]);
+  await heartbeat.beat();
   logger.info(
     {
       syncIntervalMinutes: options.syncIntervalMinutes,
@@ -235,6 +250,8 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
     syncQueue,
     async close() {
       // Workers first: close() waits for a running sync to finish.
+      await heartbeat.stop();
+      heartbeatRedis.disconnect();
       await schedulerWorker.close();
       await notificationWorker.close();
       await maintenanceWorker.close();

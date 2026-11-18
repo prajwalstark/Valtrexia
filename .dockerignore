@@ -1,0 +1,26 @@
+# Nothing secret, generated or local reaches the build. An allow-list would
+# be safer still, but would have to be kept in step with every new package.
+.git
+**/node_modules
+**/.next
+**/dist
+**/coverage
+**/.pnpm-store
+**/*.tsbuildinfo
+**/next-env.d.ts
+packages/db/src/generated
+
+# Environment files, including the example: images take configuration from
+# the platform at run time, never from a file.
+**/.env
+**/.env.*
+.clerk
+**/.DS_Store
+**/*.log
+
+# Not needed to build or run.
+.github
+docker-compose.yml
+docker
+**/*.md
+!apps/web/**/*.md
