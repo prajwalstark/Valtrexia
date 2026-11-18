@@ -61,9 +61,16 @@ describe("catalog: every table is protected", () => {
     `);
     // tenant_deletions records workspaces that no longer exist: the
     // operator's, not any tenant's. The runtime role has no privileges on it
-    // (offboarding.db.test.ts).
+    // (offboarding.db.test.ts). operator_alerts holds counts about the
+    // service itself, never tenant data (operator/check.db.test.ts).
     expect(result.rows.map((row) => row.tablename)).toEqual(
-      [...TENANT_TABLES, "tenants", "tenant_deletions", "_prisma_migrations"].sort(),
+      [
+        ...TENANT_TABLES,
+        "tenants",
+        "tenant_deletions",
+        "operator_alerts",
+        "_prisma_migrations",
+      ].sort(),
     );
   });
 
@@ -122,6 +129,7 @@ describe("catalog: every table is protected", () => {
     expect(result.rows.map((row) => row.proname)).toEqual([
       "apply_retention",
       "count_encrypted_records_by_key",
+      "fleet_health_counts",
       "list_due_integrations",
       "list_due_notification_batches",
       "list_encrypted_records",
@@ -431,6 +439,21 @@ describe("cross-tenant references", () => {
     );
     expect(rows).toHaveLength(2);
     expect(Object.keys(rows[0]!).sort()).toEqual(["batch_id", "tenant_id"]);
+  });
+
+  it("the fleet's health is counted across tenants as numbers only", async () => {
+    const { rows } = await asTenant(app, null, (client) =>
+      client.query<Record<string, string>>("SELECT * FROM fleet_health_counts(interval '1 hour')"),
+    );
+    expect(rows).toHaveLength(1);
+    expect(Object.keys(rows[0]!).sort()).toEqual([
+      "batches_failed_last_hour",
+      "batches_overdue",
+      "integrations_failing",
+      "integrations_overdue",
+      "integrations_total",
+    ]);
+    for (const value of Object.values(rows[0]!)) expect(String(value)).toMatch(/^\d+$/);
   });
 
   it("encrypted records are listed across tenants as ids and key ids only", async () => {

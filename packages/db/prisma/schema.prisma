@@ -491,3 +491,22 @@ model TenantDeletion {
 
   @@map("tenant_deletions")
 }
+
+/// Alerts to the people running the service, about the service itself. Not
+/// tenant data: counts only, never a tenant's name or records. At most one
+/// open row per condition (partial unique index, in SQL).
+model OperatorAlert {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Which check: integrations_failing, notifications_backlog, ...
+  condition       String
+  openedAt        DateTime  @default(now()) @map("opened_at") @db.Timestamptz(3)
+  closedAt        DateTime? @map("closed_at") @db.Timestamptz(3)
+  /// The counts that opened it.
+  details         Json      @default("{}")
+  /// When the operator was told it opened, and that it cleared.
+  openNotifiedAt  DateTime? @map("open_notified_at") @db.Timestamptz(3)
+  closeNotifiedAt DateTime? @map("close_notified_at") @db.Timestamptz(3)
+
+  @@index([openedAt(sort: Desc)])
+  @@map("operator_alerts")
+}

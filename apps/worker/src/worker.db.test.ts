@@ -5,6 +5,7 @@ import { Queue } from "bullmq";
 import pg from "pg";
 import { Redis } from "ioredis";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, inject, it } from "vitest";
+import { maintenanceStatusKey } from "@valtrexia/core/server";
 import { heartbeatKey, isHeartbeatFresh } from "./heartbeat";
 import {
   parseSyncJob,
@@ -203,6 +204,23 @@ describe("scheduler tick", () => {
       { ...ok, vendor: "mock" },
     ]) {
       expect(() => parseSyncJob(bad)).toThrow();
+    }
+  });
+});
+
+describe("worker maintenance status", () => {
+  it("records whether the last maintenance run succeeded, for the operator check", async () => {
+    const redis = new Redis(redisUrl);
+    try {
+      const worker = await start({ instanceId: `test-${randomUUID()}` });
+      await worker.maintainNow();
+      const stored = JSON.parse((await redis.get(maintenanceStatusKey(prefix)))!) as {
+        ok: boolean;
+      };
+      expect(stored.ok).toBe(true);
+      expect(await worker.checkNow()).toMatchObject({ snapshot: { maintenance: { ok: true } } });
+    } finally {
+      redis.disconnect();
     }
   });
 });

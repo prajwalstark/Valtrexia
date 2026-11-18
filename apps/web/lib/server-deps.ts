@@ -63,6 +63,11 @@ function getConnectionTestLimiter(): RateLimiter {
   return connectionTestLimiter;
 }
 
+/** This server's Redis, for the status endpoint; null in development without one. */
+export function getRedisForStatus(): Redis | null {
+  return getRedis();
+}
+
 /** Pings Redis, for the readiness check. Undefined when this server has no Redis (development). */
 export function redisPing(): (() => Promise<void>) | undefined {
   const redis = getRedis();

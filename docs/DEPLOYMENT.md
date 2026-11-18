@@ -82,7 +82,7 @@ Every variable, which image needs it, and whether it is a secret. Secrets come f
 | `REDIS_URL`                                                               |  ✓  |   ✓    |         |   ✓    | `rediss://default:<token>@<elasticache-endpoint>:6379`                                                          |
 | `CLERK_PUBLISHABLE_KEY`                                                   |  ✓  |        |         |        | From your Clerk **production** instance                                                                         |
 | `CLERK_SECRET_KEY`                                                        |  ✓  |        |         |   ✓    | From the same instance                                                                                          |
-| `CLERK_WEBHOOK_SIGNING_SECRET`                                            |  ✓  |        |         |   ✓    | From the webhook endpoint you create in Clerk ([section 5](#5-first-deployment))                                |
+| `CLERK_WEBHOOK_SIGNING_SECRET`                                            |  ✓  |        |         |   ✓    | From the webhook endpoint you create in Clerk ([section 6](#6-first-deployment))                                |
 | `VALTREXIA_KEY_PROVIDER`                                                  |  ✓  |   ✓    |         |        | `aws-kms`                                                                                                       |
 | `VALTREXIA_KMS_KEY_ID`                                                    |  ✓  |   ✓    |         |        | The key's alias ARN, `arn:aws:kms:<region>:<account>:alias/valtrexia`                                           |
 | `AWS_REGION`                                                              |  ✓  |   ✓    |         |        | Optional; defaults to the key's region                                                                          |
@@ -95,6 +95,11 @@ Every variable, which image needs it, and whether it is a secret. Secrets come f
 | `RETENTION_*_DAYS`                                                        |     |   ✓    |         |        | Optional; defaults 90, 395 and 730                                                                              |
 | `WORKER_INSTANCE_ID`                                                      |     |   ✓    |         |        | Leave unset on Fargate: each task's host name is unique                                                         |
 | `LOG_LEVEL`                                                               |  ✓  |   ✓    |         |        | Optional, default `info`                                                                                        |
+| `OPERATOR_ALERT_EMAIL`                                                    |     |   ✓    |         |        | Who is alerted about the service itself; comma-separated                                                        |
+| `OPERATOR_ALERT_WEBHOOK_URL`                                              |     |   ✓    |         |   ✓    | Optional: a Slack incoming webhook, or any HTTPS endpoint                                                       |
+| `OPERATOR_ALERT_WEBHOOK_SECRET`                                           |     |   ✓    |         |   ✓    | Optional: signs the webhook (`whsec_…`)                                                                         |
+| `OPERATOR_CHECK_SECONDS`                                                  |  ✓  |   ✓    |         |        | Optional, default 300. The same value on both                                                                   |
+| `OPERATOR_STATUS_TOKEN`                                                   |  ✓  |        |         |   ✓    | Turns on `/api/status`; at least 32 characters                                                                  |
 
 `NODE_ENV=production` is set in the images. In production the apps refuse to start, or report not ready, if the database URL does not use `sslmode=verify-full`, if Redis is not `rediss://` with a password, or if the key provider is `local`. The migrate image refuses an owner URL that would not verify the certificate. Never set `VALTREXIA_ENABLE_MOCK`, `VALTREXIA_LOCAL_KEK`, `VALTREXIA_PREVIOUS_LOCAL_KEKS` or `VALTREXIA_ALLOW_PRIVATE_DESTINATIONS` in production; the apps ignore or refuse them there.
 
@@ -134,7 +139,19 @@ Target group health check: path `/api/ready`, expecting 200. The two endpoints d
 
 Both answer without a session and outside Clerk's middleware, and say nothing about the system beyond `ok`, `ready`, or which part is not ready.
 
-## 5. First deployment
+## 5. Watching the service
+
+The worker alerts `OPERATOR_ALERT_EMAIL` and `OPERATOR_ALERT_WEBHOOK_URL` about fleet-wide problems (README, "Operator monitoring"). It cannot report its own death, so something outside must poll `/api/status`:
+
+1. Set `OPERATOR_STATUS_TOKEN` on the web service.
+2. Create a CloudWatch Synthetics canary (or use any uptime service) that requests `https://<your-domain>/api/status` every 5 minutes with the header `Authorization: Bearer <token>` (store the token in Secrets Manager for the canary), and fails on anything but 200.
+3. Alarm on the canary's failures, to the same people as the operator alerts. Also alarm on the load balancer's healthy host count for the web service, which covers the web app itself.
+
+The response names what is wrong (`no_worker_heartbeat`, `fleet_check_stale`, or an alert's condition) and gives counts only.
+
+Each fleet check also logs one line with `"metric":"fleet_health"` and every number; a CloudWatch metric filter on it can chart failing integrations and queue depth over time.
+
+## 6. First deployment
 
 1. Create the resources in [section 2](#2-aws-resources) and the secrets in [section 3](#3-configuration).
 2. Create the `valtrexia_app` role in the database (section 2, item 3).
@@ -145,7 +162,7 @@ Both answer without a session and outside Clerk's middleware, and say nothing ab
 7. In Clerk's production instance: set the allowed origins and redirect URLs to your domain, require multi-factor authentication, and add a webhook endpoint at `https://<your-domain>/api/webhooks/clerk` subscribed to `organization.*` and `organizationMembership.*`. Put its signing secret in `CLERK_WEBHOOK_SIGNING_SECRET` and redeploy the web service.
 8. Sign up, set up two-step verification, create a workspace and connect a vendor. Its first sync should finish within a few minutes.
 
-## 6. Every later deployment
+## 7. Every later deployment
 
 1. Build and push the three images for the new commit.
 2. Run the migrate task with the new migrate image. Migrations are additive by convention (README, "Changing the schema"), so the version still running keeps working against the new schema while the services roll over.
@@ -162,6 +179,7 @@ To roll back, deploy the previous images. Migrations are not rolled back: being 
 - The web app answers `/api/health`, `/api/ready` and the sign-in page, with a nonce-based Content-Security-Policy, and its container health check passes.
 - A web app given an unencrypted Redis URL reports not ready.
 - The worker starts, writes its heartbeat, runs maintenance, and passes its health check.
+- `/api/status` refuses a wrong token, reports ok with the worker running, and turns to 503 naming the missing heartbeat when the worker is stopped; without a token configured it does not exist.
 - A worker given an unencrypted database URL refuses to start, without printing the URL.
 
 What CI cannot check is everything AWS-specific: IAM, the RDS certificate bundle, ElastiCache's TLS, KMS, the load balancer and networking.

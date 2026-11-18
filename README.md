@@ -707,6 +707,24 @@ Production runs from three container images built by the `Dockerfile` at the roo
 
 Both endpoints sit outside Clerk's middleware and need no session. CI builds the images and runs them as production would on every push (`docker/smoke/run.sh`).
 
+### Operator monitoring
+
+Alerts about the service itself, for whoever runs it. Tenants' own alerts are separate (see [Notifications](#notifications)). There are two layers, because a stopped worker cannot report its own death.
+
+**Inside the worker.** Every five minutes one worker checks the whole fleet, from counts across every workspace (never names or data), and alerts the operator when a condition starts and again when it clears:
+
+| Condition               | Starts when                                                                                            |
+| ----------------------- | ------------------------------------------------------------------------------------------------------ |
+| `integrations_failing`  | More than a quarter of integrations failed their last sync, and at least four did                      |
+| `integrations_overdue`  | Any integration has gone more than twice the sync interval, plus 30 minutes, without a successful sync |
+| `notifications_failing` | Any notification was given up on in the last hour                                                      |
+| `notifications_backlog` | More than 100 notifications are over 15 minutes overdue                                                |
+| `maintenance_failing`   | The last maintenance run (retention, workspace deletion) failed                                        |
+
+Alerts go by email to `OPERATOR_ALERT_EMAIL` (through the same provider as tenants' email) and by webhook to `OPERATOR_ALERT_WEBHOOK_URL`: a JSON body whose `text` field is what Slack's incoming webhooks display, signed per Standard Webhooks when `OPERATOR_ALERT_WEBHOOK_SECRET` is set. An alert is opened once per condition however many workers check, and each opening and clearing is reported until every destination has taken it (for up to 24 hours). Each check also writes one log line, `"metric":"fleet_health"`, with every number, for log-based metrics. Without a destination, alerts are only logged, and the worker says so at startup.
+
+**Outside it.** `GET /api/status` on the web app, with `Authorization: Bearer <OPERATOR_STATUS_TOKEN>`, reports the service's health for an external monitor to poll: 200 when a worker's heartbeat is fresh, the last fleet check is recent and no alert is open; 503 otherwise, listing which (`no_worker_heartbeat`, `fleet_check_stale`, or a condition). The body holds counts, condition names and ages only. Without a token configured the endpoint does not exist (404); a wrong token gets 401. Point an uptime monitor at it; [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) shows how with CloudWatch.
+
 ## Commands
 
 | Command               | What it does                                                                   |

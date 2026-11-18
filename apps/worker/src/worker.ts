@@ -1,9 +1,11 @@
-import type {
-  EmailSender,
-  KeyProvider,
-  Logger,
-  OutboundPolicy,
-  Resolver,
+import {
+  maintenanceStatusKey,
+  type EmailSender,
+  type KeyProvider,
+  type Logger,
+  type OperatorAlertConfig,
+  type OutboundPolicy,
+  type Resolver,
 } from "@valtrexia/core/server";
 import type { Db } from "@valtrexia/db";
 import { Queue, Worker } from "bullmq";
@@ -21,6 +23,9 @@ import {
   MAINTENANCE_QUEUE,
   MAINTENANCE_SCHEDULER_ID,
   NOTIFICATION_QUEUE,
+  OPERATOR_JOB,
+  OPERATOR_QUEUE,
+  OPERATOR_SCHEDULER_ID,
   parseSyncJob,
   QUEUE_PREFIX,
   redisConnection,
@@ -32,6 +37,7 @@ import {
 import type { RetentionPolicy } from "./config";
 import { runMaintenance, type MaintenanceResult } from "./maintenance/run";
 import { DEFAULT_RETENTION } from "./maintenance/retention";
+import { runOperatorCheck, type OperatorCheckResult } from "./operator/check";
 import { enqueueDueSyncs, type TickResult } from "./scheduler";
 import { IntegrationNotFoundError, syncIntegration, type SyncDeps } from "./sync/sync-integration";
 
@@ -55,6 +61,10 @@ export interface WorkerOptions {
   retention?: RetentionPolicy;
   /** How often maintenance runs. Default 6 hours. */
   maintenanceEveryHours?: number;
+  /** Where alerts about the service itself go. Default: nowhere (logged). */
+  operatorAlerts?: OperatorAlertConfig;
+  /** How often the fleet is checked for operator alerts. Default 5 minutes. */
+  operatorCheckSeconds?: number;
   /** Names this process in its heartbeat. Default: WORKER_INSTANCE_ID, else the host name. */
   instanceId?: string;
   /** Redis key prefix. Tests use their own so they never see each other's jobs. */
@@ -72,6 +82,8 @@ export interface RunningWorker {
   deliverNow(): Promise<DeliveryResult[]>;
   /** Runs maintenance (retention, tenant deletion) now, without waiting for the timer. */
   maintainNow(): Promise<MaintenanceResult>;
+  /** Runs the operator check now, without waiting for the timer. */
+  checkNow(): Promise<OperatorCheckResult>;
   /** The sync queue, for inspection. */
   syncQueue: Queue;
   /** Stops taking new work, lets running syncs finish, and closes connections. */
@@ -98,6 +110,7 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
   const schedulerQueue = new Queue(SCHEDULER_QUEUE, { connection, prefix });
   const notificationQueue = new Queue(NOTIFICATION_QUEUE, { connection, prefix });
   const maintenanceQueue = new Queue(MAINTENANCE_QUEUE, { connection, prefix });
+  const operatorQueue = new Queue(OPERATOR_QUEUE, { connection, prefix });
   const heartbeatRedis = new Redis(options.redisUrl, { maxRetriesPerRequest: 1 });
   heartbeatRedis.on("error", (error: Error) =>
     logger.warn({ errorName: error.name }, "heartbeat connection failed"),
@@ -113,8 +126,47 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
     ...(options.resolver ? { resolver: options.resolver } : {}),
   };
   const deliver = () => deliverDueNotifications(deliveryDeps);
-  const maintain = () =>
-    runMaintenance({ db, logger }, { retention: options.retention ?? DEFAULT_RETENTION });
+  const maintain = async () => {
+    // Whether the last run succeeded, for the operator check.
+    const record = (ok: boolean) =>
+      heartbeatRedis
+        .set(maintenanceStatusKey(prefix), JSON.stringify({ ok, at: new Date().toISOString() }))
+        .catch(() => undefined);
+    try {
+      const result = await runMaintenance(
+        { db, logger },
+        { retention: options.retention ?? DEFAULT_RETENTION },
+      );
+      await record(true);
+      return result;
+    } catch (error) {
+      await record(false);
+      throw error;
+    }
+  };
+  const check = () =>
+    runOperatorCheck({
+      db,
+      logger,
+      redis: heartbeatRedis,
+      prefix,
+      syncIntervalMinutes: options.syncIntervalMinutes,
+      queues: [
+        {
+          name: "sync",
+          counts: () => syncQueue.getJobCounts("waiting", "active", "delayed", "failed"),
+        },
+        {
+          name: "notifications",
+          counts: () => notificationQueue.getJobCounts("waiting", "active", "delayed", "failed"),
+        },
+      ],
+      alerts: options.operatorAlerts ?? { emails: [], webhookUrl: null, webhookSecret: null },
+      emailSender: options.emailSender ?? null,
+      outboundPolicy: options.outboundPolicy ?? {},
+      ...(options.resolver ? { resolver: options.resolver } : {}),
+      ...(options.now ? { now: options.now } : {}),
+    });
 
   const tick = () =>
     enqueueDueSyncs({
@@ -183,11 +235,21 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
     concurrency: 1,
   });
 
+  const operatorWorker = new Worker(
+    OPERATOR_QUEUE,
+    async () => {
+      const result = await check();
+      return { opened: result.opened, closed: result.closed, notified: result.notified };
+    },
+    { connection, prefix, concurrency: 1 },
+  );
+
   for (const [name, worker] of [
     ["scheduler", schedulerWorker],
     ["sync", syncWorker],
     ["notifications", notificationWorker],
     ["maintenance", maintenanceWorker],
+    ["operator", operatorWorker],
   ] as const) {
     // Connection-level problems (Redis restarting, for example). Without a
     // listener an "error" event would crash the process.
@@ -198,6 +260,9 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
   );
   maintenanceWorker.on("failed", (_job, error) =>
     logger.error({ err: error }, "maintenance failed; it runs again at its next time"),
+  );
+  operatorWorker.on("failed", (_job, error) =>
+    logger.error({ err: error }, "operator check failed; it runs again at its next time"),
   );
 
   // One schedule, stored in Redis. Starting a second worker process updates
@@ -221,6 +286,12 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
     { name: MAINTENANCE_JOB, opts: { removeOnComplete: true, removeOnFail: 20 } },
   );
 
+  await operatorQueue.upsertJobScheduler(
+    OPERATOR_SCHEDULER_ID,
+    { every: (options.operatorCheckSeconds ?? 300) * 1000 },
+    { name: OPERATOR_JOB, opts: { removeOnComplete: true, removeOnFail: 20 } },
+  );
+
   // Started once the queues answer: a heartbeat means this process is working.
   const heartbeat = startHeartbeat(heartbeatRedis, {
     instanceId: options.instanceId ?? workerInstanceId(),
@@ -229,6 +300,7 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
 
   await Promise.all([
     maintenanceWorker.waitUntilReady(),
+    operatorWorker.waitUntilReady(),
     schedulerWorker.waitUntilReady(),
     syncWorker.waitUntilReady(),
     notificationWorker.waitUntilReady(),
@@ -247,6 +319,7 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
     tickNow: tick,
     deliverNow: deliver,
     maintainNow: maintain,
+    checkNow: check,
     syncQueue,
     async close() {
       // Workers first: close() waits for a running sync to finish.
@@ -255,12 +328,14 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
       await schedulerWorker.close();
       await notificationWorker.close();
       await maintenanceWorker.close();
+      await operatorWorker.close();
       await syncWorker.close();
       await Promise.all([
         schedulerQueue.close(),
         syncQueue.close(),
         notificationQueue.close(),
         maintenanceQueue.close(),
+        operatorQueue.close(),
       ]);
       logger.info("worker stopped");
     },

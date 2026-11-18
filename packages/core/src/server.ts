@@ -57,3 +57,26 @@ export {
   type EmailSender,
 } from "./notifications/email-sender";
 export { RESEND_API_URL, ResendEmailSender, type ResendOptions } from "./notifications/resend";
+export {
+  evaluateFleet,
+  OPERATOR_CONDITIONS,
+  OPERATOR_THRESHOLDS,
+  renderOperatorAlert,
+  type ConditionState,
+  type FleetSnapshot,
+  type OperatorAlertMessage,
+  type OperatorCondition,
+} from "./operator/conditions";
+export { operatorAlertConfigFromEnv, type OperatorAlertConfig } from "./operator/config";
+export {
+  fleetSnapshotKey,
+  HEARTBEAT_INTERVAL_MS,
+  HEARTBEAT_STALE_MS,
+  heartbeatAt,
+  heartbeatKey,
+  heartbeatKeyPattern,
+  isHeartbeatFresh,
+  maintenanceStatusKey,
+  REDIS_PREFIX,
+  type Heartbeat,
+} from "./operator/keys";

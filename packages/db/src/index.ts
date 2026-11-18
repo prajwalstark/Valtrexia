@@ -10,6 +10,8 @@ export {
   type DueNotificationBatch,
   type EncryptedRecordRef,
   type EncryptedRecordType,
+  type FleetHealthCounts,
+  type OperatorAlertRow,
   type RetentionBatch,
   type TenantContext,
   type TenantTx,

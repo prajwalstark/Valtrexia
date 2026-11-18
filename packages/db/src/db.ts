@@ -37,6 +37,30 @@ export interface DueIntegration {
   tenantId: string;
 }
 
+/** The whole fleet's health, as counts across every tenant. No ids or names. */
+export interface FleetHealthCounts {
+  integrationsTotal: number;
+  /** Whose last sync failed. */
+  integrationsFailing: number;
+  /** With no successful sync for longer than the overdue period. */
+  integrationsOverdue: number;
+  /** Notification messages still waiting more than 15 minutes after they were due. */
+  batchesOverdue: number;
+  /** Notification messages given up on in the last hour. */
+  batchesFailedLastHour: number;
+}
+
+/** An alert to the operator about the service itself. */
+export interface OperatorAlertRow {
+  id: string;
+  condition: string;
+  openedAt: Date;
+  closedAt: Date | null;
+  details: Record<string, unknown>;
+  openNotifiedAt: Date | null;
+  closeNotifiedAt: Date | null;
+}
+
 export interface RetentionBatch {
   payloadsCleared: number;
   resultsDeleted: number;
@@ -124,6 +148,30 @@ export interface Db {
   countEncryptedRecordsByKey(): Promise<
     { type: EncryptedRecordType; keyId: string | null; records: number }[]
   >;
+
+  /** The fleet's health across every tenant, as counts. */
+  fleetHealthCounts(input: { overdueAfterMinutes: number }): Promise<FleetHealthCounts>;
+
+  /**
+   * Opens an alert for `condition` unless one is already open. Returns the
+   * new alert, or null if one was open (so the operator is told once).
+   */
+  openOperatorAlert(
+    condition: string,
+    details: Record<string, unknown>,
+  ): Promise<OperatorAlertRow | null>;
+
+  /** Closes the open alert for `condition`, if any. Returns it, or null. */
+  closeOperatorAlert(condition: string, now?: Date): Promise<OperatorAlertRow | null>;
+
+  /** Open alerts, oldest first. */
+  openOperatorAlerts(): Promise<OperatorAlertRow[]>;
+
+  /** Alerts whose opening or clearing has not been reported yet, opened after `since`. */
+  operatorAlertsToNotify(since: Date): Promise<OperatorAlertRow[]>;
+
+  /** Records that the operator was told an alert opened, or cleared. */
+  markOperatorAlertNotified(id: string, event: "opened" | "closed", at?: Date): Promise<void>;
 
   /** Resolves when the database answers a trivial query. For readiness checks. */
   ping(): Promise<void>;
@@ -259,6 +307,74 @@ export function createDb({ url, maxConnections = 10 }: CreateDbOptions): Db {
       }));
     },
 
+    async fleetHealthCounts({ overdueAfterMinutes }) {
+      const rows = await prisma.$queryRaw<
+        {
+          integrations_total: bigint;
+          integrations_failing: bigint;
+          integrations_overdue: bigint;
+          batches_overdue: bigint;
+          batches_failed_last_hour: bigint;
+        }[]
+      >`
+        SELECT * FROM fleet_health_counts(make_interval(mins => ${Math.floor(overdueAfterMinutes)}::int))
+      `;
+      const row = rows[0]!;
+      return {
+        integrationsTotal: Number(row.integrations_total),
+        integrationsFailing: Number(row.integrations_failing),
+        integrationsOverdue: Number(row.integrations_overdue),
+        batchesOverdue: Number(row.batches_overdue),
+        batchesFailedLastHour: Number(row.batches_failed_last_hour),
+      };
+    },
+
+    async openOperatorAlert(condition, details) {
+      // The partial unique index makes a second open row for the condition
+      // impossible; ON CONFLICT turns that into "nothing to do".
+      const rows = await prisma.$queryRaw<OperatorAlertDbRow[]>`
+        INSERT INTO operator_alerts (condition, details)
+        VALUES (${condition}, ${JSON.stringify(details)}::jsonb)
+        ON CONFLICT (condition) WHERE closed_at IS NULL DO NOTHING
+        RETURNING *
+      `;
+      return rows[0] ? toAlert(rows[0]) : null;
+    },
+
+    async closeOperatorAlert(condition, now = new Date()) {
+      const rows = await prisma.$queryRaw<OperatorAlertDbRow[]>`
+        UPDATE operator_alerts SET closed_at = GREATEST(${now}::timestamptz, opened_at)
+        WHERE condition = ${condition} AND closed_at IS NULL
+        RETURNING *
+      `;
+      return rows[0] ? toAlert(rows[0]) : null;
+    },
+
+    async openOperatorAlerts() {
+      const rows = await prisma.$queryRaw<OperatorAlertDbRow[]>`
+        SELECT * FROM operator_alerts WHERE closed_at IS NULL ORDER BY opened_at
+      `;
+      return rows.map(toAlert);
+    },
+
+    async operatorAlertsToNotify(since) {
+      const rows = await prisma.$queryRaw<OperatorAlertDbRow[]>`
+        SELECT * FROM operator_alerts
+        WHERE opened_at >= ${since}::timestamptz
+          AND (open_notified_at IS NULL OR (closed_at IS NOT NULL AND close_notified_at IS NULL))
+        ORDER BY opened_at
+      `;
+      return rows.map(toAlert);
+    },
+
+    async markOperatorAlertNotified(id, event, at = new Date()) {
+      if (event === "opened") {
+        await prisma.$executeRaw`UPDATE operator_alerts SET open_notified_at = ${at}::timestamptz WHERE id = ${id}::uuid`;
+      } else {
+        await prisma.$executeRaw`UPDATE operator_alerts SET close_notified_at = ${at}::timestamptz WHERE id = ${id}::uuid`;
+      }
+    },
+
     async ping() {
       await prisma.$queryRaw`SELECT 1`;
     },
@@ -308,4 +424,29 @@ export function getDb(): Db {
     shared = createDb({ url });
   }
   return shared;
+}
+
+interface OperatorAlertDbRow {
+  id: string;
+  condition: string;
+  opened_at: Date;
+  closed_at: Date | null;
+  details: unknown;
+  open_notified_at: Date | null;
+  close_notified_at: Date | null;
+}
+
+function toAlert(row: OperatorAlertDbRow): OperatorAlertRow {
+  return {
+    id: row.id,
+    condition: row.condition,
+    openedAt: row.opened_at,
+    closedAt: row.closed_at,
+    details:
+      row.details && typeof row.details === "object"
+        ? (row.details as Record<string, unknown>)
+        : {},
+    openNotifiedAt: row.open_notified_at,
+    closeNotifiedAt: row.close_notified_at,
+  };
 }

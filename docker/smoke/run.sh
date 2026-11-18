@@ -152,8 +152,11 @@ docker run --rm "${RUN_AS_PROD[@]}" -e DATABASE_URL_OWNER="$OWNER_DB_PRISMA" "$M
   || fail "migrations did not apply"
 echo "ok: migrations applied over verified TLS"
 
+STATUS_TOKEN="$(openssl rand -hex 24)"
+
 step "Web"
 docker run -d --name vx-smoke-web "${RUN_AS_PROD[@]}" "${APP_ENV[@]}" \
+  -e OPERATOR_STATUS_TOKEN="$STATUS_TOKEN" \
   -e CLERK_PUBLISHABLE_KEY="pk_test_$(printf 'placeholder.clerk.accounts.dev$' | base64 | tr -d '\n')" \
   -e CLERK_SECRET_KEY=sk_test_placeholder \
   "$WEB" >/dev/null
@@ -176,6 +179,8 @@ docker run -d --name vx-smoke-web-insecure "${RUN_AS_PROD[@]}" "${APP_ENV[@]}" \
   "$WEB" >/dev/null
 wait_for 60 "the second web app answering" curl -sf http://localhost:3001/api/health
 expect_status http://localhost:3001/api/ready 503
+# It was given no status token, so its status endpoint does not exist.
+expect_status http://localhost:3001/api/status 404
 
 step "Worker"
 docker run -d --name vx-smoke-worker "${RUN_AS_PROD[@]}" "${APP_ENV[@]}" \
@@ -186,6 +191,22 @@ echo "ok: the worker is running and its heartbeat is fresh"
 docker logs vx-smoke-worker 2>&1 | grep -q '"msg":"retention applied"' \
   || fail "the worker did not run maintenance at startup"
 echo "ok: maintenance ran"
+
+step "Operator status"
+status_with() { curl -s -o "$WORK/status.json" -w '%{http_code}' -H "authorization: Bearer $1" http://localhost:3000/api/status; }
+[[ "$(status_with wrong-token)" == "401" ]] || fail "the status endpoint accepted a wrong token"
+echo "ok: a wrong token is refused"
+wait_for 90 "the status endpoint reporting a healthy service" \
+  sh -c "[ \"\$(curl -s -o /dev/null -w '%{http_code}' -H 'authorization: Bearer $STATUS_TOKEN' http://localhost:3000/api/status)\" = 200 ]"
+[[ "$(status_with "$STATUS_TOKEN")" == "200" ]] || fail "status: $(cat "$WORK/status.json")"
+grep -q '"status":"ok"' "$WORK/status.json" || fail "status: $(cat "$WORK/status.json")"
+echo "ok: status is ok with the worker running"
+# A stopped worker cannot report itself; the status endpoint must notice.
+docker stop -t 30 vx-smoke-worker >/dev/null
+[[ "$(status_with "$STATUS_TOKEN")" == "503" ]] || fail "status still ok after the worker stopped: $(cat "$WORK/status.json")"
+grep -q "no_worker_heartbeat" "$WORK/status.json" || fail "status did not name the missing worker: $(cat "$WORK/status.json")"
+echo "ok: a stopped worker turns status to 503, naming the missing heartbeat"
+docker start vx-smoke-worker >/dev/null
 
 step "Worker with an unencrypted database refuses to start"
 if docker run --rm "${RUN_AS_PROD[@]}" "${APP_ENV[@]}" \

@@ -17,6 +17,7 @@ describe("worker configuration", () => {
       notificationTickSeconds: 30,
       dattoBaseUrl: undefined,
       logLevel: "info",
+      operatorCheckSeconds: 300,
       // Decision 8: payloads 90 days, results 13 months, audit entries 24 months.
       retention: { payloadDays: 90, resultDays: 395, auditDays: 730 },
     });

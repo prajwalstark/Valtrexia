@@ -6,13 +6,18 @@ export const SYNC_QUEUE = "sync";
 /** The repeating tick that finds due integrations and fills the sync queue. */
 export const SCHEDULER_QUEUE = "scheduler";
 /** Every key this application writes to Redis starts with this. */
-export const QUEUE_PREFIX = "valtrexia";
+export { REDIS_PREFIX as QUEUE_PREFIX } from "@valtrexia/core/server";
 
 /** The repeating job that sends notifications that are due. */
 export const NOTIFICATION_QUEUE = "notifications";
 
 /** The repeating job that applies retention and deletes offboarded tenants. */
 export const MAINTENANCE_QUEUE = "maintenance";
+
+/** The repeating check of the whole fleet, which alerts the operator. */
+export const OPERATOR_QUEUE = "operator";
+export const OPERATOR_JOB = "check";
+export const OPERATOR_SCHEDULER_ID = "operator-check";
 
 export const SYNC_JOB = "sync-integration";
 export const MAINTENANCE_JOB = "maintain";

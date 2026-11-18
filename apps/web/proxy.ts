@@ -55,9 +55,9 @@ export default clerkMiddleware(
 export const config = {
   matcher: [
     // Everything except Next.js internals, static files and the health checks.
-    "/((?!_next|api/health$|api/ready$|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
+    "/((?!_next|api/health$|api/ready$|api/status$|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
     // API routes, except the health checks: those must answer whatever
     // state Clerk is in, and touch no session.
-    "/(api(?!/health$|/ready$)|trpc)(.*)",
+    "/(api(?!/health$|/ready$|/status$)|trpc)(.*)",
   ],
 };

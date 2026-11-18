@@ -5,6 +5,7 @@ import {
   createEmailSenderFromEnv,
   createKeyProviderFromEnv,
   createLogger,
+  operatorAlertConfigFromEnv,
   outboundPolicyFromEnv,
 } from "@valtrexia/core/server";
 import { createDb } from "@valtrexia/db";
@@ -14,6 +15,7 @@ import { startWorker } from "./worker";
 async function main(): Promise<void> {
   const config = parseConfig(process.env);
   assertProductionTransport(process.env);
+  const operatorAlerts = operatorAlertConfigFromEnv(process.env);
   const logger = createLogger({ name: "worker", level: config.logLevel });
 
   // Each running sync holds at most one connection at a time; leave headroom
@@ -38,8 +40,15 @@ async function main(): Promise<void> {
     emailSender: createEmailSenderFromEnv(process.env, logger),
     dattoBaseUrl: config.dattoBaseUrl,
     retention: config.retention,
+    operatorAlerts,
+    operatorCheckSeconds: config.operatorCheckSeconds,
   });
   logger.info(`${brand.name} worker is running`);
+  if (operatorAlerts.emails.length === 0 && !operatorAlerts.webhookUrl) {
+    logger.warn(
+      "no operator alert destination: problems with the service itself are only logged. Set OPERATOR_ALERT_EMAIL or OPERATOR_ALERT_WEBHOOK_URL.",
+    );
+  }
 
   let stopping = false;
   const stop = (signal: string) => {

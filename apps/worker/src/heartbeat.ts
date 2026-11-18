@@ -1,11 +1,18 @@
 import { hostname } from "node:os";
 import type { Redis } from "ioredis";
-import { QUEUE_PREFIX } from "./queues";
+import {
+  HEARTBEAT_INTERVAL_MS,
+  HEARTBEAT_STALE_MS,
+  heartbeatKey,
+  type Heartbeat,
+} from "@valtrexia/core/server";
 
-/** How often a running worker says it is alive. */
-export const HEARTBEAT_INTERVAL_MS = 30_000;
-/** A heartbeat older than this means the worker is not healthy: it missed three beats. */
-export const HEARTBEAT_STALE_MS = 3 * HEARTBEAT_INTERVAL_MS;
+export {
+  HEARTBEAT_INTERVAL_MS,
+  HEARTBEAT_STALE_MS,
+  heartbeatKey,
+  isHeartbeatFresh,
+} from "@valtrexia/core/server";
 
 /**
  * Which worker process this is. Defaults to the host name, which is unique
@@ -13,16 +20,6 @@ export const HEARTBEAT_STALE_MS = 3 * HEARTBEAT_INTERVAL_MS;
  */
 export function workerInstanceId(env: Record<string, string | undefined> = process.env): string {
   return env.WORKER_INSTANCE_ID?.trim() || hostname();
-}
-
-export function heartbeatKey(instanceId: string, prefix = QUEUE_PREFIX): string {
-  return `${prefix}:heartbeat:worker:${instanceId}`;
-}
-
-export interface Heartbeat {
-  /** When this beat was written, in milliseconds since the epoch. */
-  at: number;
-  startedAt: number;
 }
 
 /**
@@ -53,15 +50,4 @@ export function startHeartbeat(
       await redis.del(key).catch(() => undefined);
     },
   };
-}
-
-/** Whether a stored heartbeat is recent enough to call its worker healthy. */
-export function isHeartbeatFresh(stored: string | null, now: number): boolean {
-  if (!stored) return false;
-  try {
-    const { at } = JSON.parse(stored) as Partial<Heartbeat>;
-    return typeof at === "number" && now - at >= -5_000 && now - at < HEARTBEAT_STALE_MS;
-  } catch {
-    return false;
-  }
 }

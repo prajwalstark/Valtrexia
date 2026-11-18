@@ -18,6 +18,8 @@ const schema = z.object({
   SCHEDULER_TICK_SECONDS: number(5, 3600, 60),
   /** How often the worker looks for notifications to send. */
   NOTIFICATION_TICK_SECONDS: number(5, 3600, 30),
+  /** How often the fleet is checked for operator alerts. */
+  OPERATOR_CHECK_SECONDS: number(60, 3600, 300),
   /** Raw vendor payloads are emptied after this many days. */
   RETENTION_RAW_PAYLOAD_DAYS: number(7, 3650, 90),
   /** Backup results are deleted after this many days (13 months). */
@@ -41,6 +43,7 @@ export interface WorkerConfig {
   dattoBaseUrl: string | undefined;
   logLevel: string;
   retention: RetentionPolicy;
+  operatorCheckSeconds: number;
 }
 
 export interface RetentionPolicy {
@@ -73,6 +76,7 @@ export function parseConfig(env: Record<string, string | undefined>): WorkerConf
     notificationTickSeconds: value.NOTIFICATION_TICK_SECONDS,
     dattoBaseUrl: value.DATTO_API_BASE_URL,
     logLevel: value.LOG_LEVEL,
+    operatorCheckSeconds: value.OPERATOR_CHECK_SECONDS,
     retention: {
       payloadDays: value.RETENTION_RAW_PAYLOAD_DAYS,
       resultDays: value.RETENTION_RESULT_DAYS,
