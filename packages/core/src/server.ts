@@ -56,3 +56,4 @@ export {
   type EmailMessage,
   type EmailSender,
 } from "./notifications/email-sender";
+export { RESEND_API_URL, ResendEmailSender, type ResendOptions } from "./notifications/resend";

@@ -10,7 +10,7 @@ Version 1 is **read-only**. It never starts, stops or changes a backup job.
 
 Phases 1 and 2 are complete: all twelve steps of [PLAN.md](./PLAN.md) and of [PLAN-PHASE-2.md](./PLAN-PHASE-2.md) are built and tested. Phase 2 added continuous integration; handling of vendor data that stops arriving; the stale-backup rule; asset settings and mute; the incidents page, audit log and workspace settings; notifications by signed webhook and email (short of a real email provider); the Veeam Service Provider Console and Kaseya UniView (Unitrends) connectors; the AWS KMS key provider and key rotation; and hardening: retention, tenant offboarding, shared rate limits, TLS in production and a nonce-based Content-Security-Policy.
 
-It is **not production-ready**. Clerk, the three vendors and AWS KMS have never been used for real from here; email has no provider yet; and a few production requirements are open (see [SECURITY.md](./SECURITY.md)).
+It is **not production-ready**. Clerk, the three vendors, AWS KMS and Resend have never been used for real from here; the deployment guide has not been followed on AWS yet; and a few production requirements are open (see [SECURITY.md](./SECURITY.md)).
 
 **What works, verified here:**
 
@@ -30,16 +30,18 @@ It is **not production-ready**. Clerk, the three vendors and AWS KMS have never 
 | Kaseya UniView  | Built from Kaseya's published OpenAPI specification, but never run against a real account. See [Kaseya UniView (Unitrends)](#kaseya-uniview-unitrends).          |
 | 3D view         | Only run with software rendering, never on a graphics card.                                                                                                      |
 | AWS KMS         | Built and tested against a stand-in KMS that behaves as AWS documents, never against AWS itself. See [Key management](#key-management).                          |
+| Resend (email)  | Built from Resend's API reference and tested against a stand-in built from it; no real email sent yet. See [Email](#email).                                      |
+| AWS deployment  | The images run as production would in CI; the guide has not been followed on AWS. See [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md).                                |
 
-**What is not built:** sending email through a real provider (the provider is not chosen yet; see [Email](#email)), and the items listed in [SECURITY.md](./SECURITY.md).
+**What is not built:** the items listed in [SECURITY.md](./SECURITY.md), and the rest of [Phase 3](./PLAN-PHASE-3.md).
 
 ### Before production
 
 1. Run the app against a real Clerk instance and walk through sign-up, MFA, onboarding and the webhook, including `organization.deleted` (it schedules the workspace's deletion).
 2. Connect a real account of each vendor and check the items listed under [Datto BCDR](#datto-bcdr), [Veeam Service Provider Console](#veeam-service-provider-console) and [Kaseya UniView (Unitrends)](#kaseya-uniview-unitrends).
-3. Choose the email provider and add its `EmailSender` (see [Email](#email)).
+3. Verify a sending domain in Resend and set `EMAIL_PROVIDER=resend`, `RESEND_API_KEY` and `EMAIL_FROM` (see [Email](#email)), then send a test from the notifications page.
 4. Create the AWS KMS key and IAM permissions, and set `VALTREXIA_KEY_PROVIDER=aws-kms` (see [Key management](#key-management)). The local key provider refuses to run in production.
-5. Provide Postgres with TLS (`sslmode=verify-full` in both database URLs) and Redis with TLS and a password (`rediss://`). Both apps refuse to start in production otherwise, and the web app needs Redis there too.
+5. Deploy as [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) describes: Postgres with verified TLS (`sslmode=verify-full` for the apps, `sslmode=require&sslaccept=strict` for migrations) and Redis with TLS and a password (`rediss://`). The apps and the migration image refuse to start in production otherwise.
 6. Work through the open items in [SECURITY.md](./SECURITY.md).
 
 ## Repository layout
@@ -509,14 +511,30 @@ Each attempt first claims the message for two minutes, so two workers never send
 
 An email channel sends one email per message to up to 20 addresses, all on the same email. It is written in plain text and in HTML, saying the same thing, with every date in the workspace's time zone: which assets need attention or have recovered, grouped by client, with when each last had a good backup. Names from vendors and people are escaped in the HTML, and line breaks are removed from the subject, so a client called `Acme\r\nBcc: …` cannot add a header.
 
-**No email provider is connected yet** ([decision 1](./PLAN-PHASE-2.md)). Sending goes through an `EmailSender` interface, and each provider is one small implementation of it; everything else (rendering, the outbox, retries) is built and tested. Until then:
+Email is sent through **[Resend](https://resend.com)**, over its HTTP API with `fetch` and no SDK (`packages/core/src/notifications/resend.ts`). It is built from Resend's API reference and tested against a stand-in built from it. **No email has been sent through a real Resend account yet.**
 
 | `EMAIL_PROVIDER` | What happens                                                                                                    |
 | ---------------- | --------------------------------------------------------------------------------------------------------------- |
 | empty (default)  | Email channels cannot be added; the page says email is not set up. Anything queued for one is not delivered     |
+| `resend`         | Sent through Resend. Needs `RESEND_API_KEY` and `EMAIL_FROM` on the worker; `EMAIL_REPLY_TO` is optional        |
 | `log`            | Development only: each email is logged by subject and number of recipients, and not sent. Refused in production |
 
-Set the same value for the web app and the worker. A provider failure is retried on the usual schedule when it may pass, and given up on when it will not.
+Set the same `EMAIL_PROVIDER` for the web app and the worker; only the worker sends, so only it needs the key.
+
+**Setting up Resend.** Verify the domain you will send from in Resend (its DNS records), create an API key with **sending access only**, and set `EMAIL_FROM` to an address on that domain, such as `Valtrexia <alerts@yourmsp.com>`. Before a domain is verified, Resend only sends to the account owner's own address. Each sender address is checked at startup, and one that could add a header (a line break, stray angle brackets or quotes) is refused.
+
+**One message, sent once.** Each send carries an `Idempotency-Key`: the message's id with a hash of exactly what is sent. Resend remembers it for 24 hours, so a retry after a failure that actually reached Resend sends nothing twice. If the wording changed between attempts (the channel was renamed, or the time zone changed), the key changes too, so the message is sent rather than refused as a mismatched repeat.
+
+**When Resend says no.** Each refusal is sorted by Resend's error type:
+
+| Resend says                                                                     | The message is                           | The notifications page shows                                      |
+| ------------------------------------------------------------------------------- | ---------------------------------------- | ----------------------------------------------------------------- |
+| `rate_limit_exceeded`, `daily_quota_exceeded`, `monthly_quota_exceeded` (429)   | Tried again on the usual schedule        | That the service is limiting this server, or its quota is used up |
+| `application_error`, `service_unavailable` (5xx), or no answer                  | Tried again                              | That the email service had a problem                              |
+| An invalid, revoked or suspended key, or an unverified sender domain (401, 403) | Tried again, in case it is fixed in time | That the operator needs to fix the email settings                 |
+| A message Resend calls invalid (400, 422)                                       | Not tried again                          | That the service refused the message as invalid                   |
+
+Resend's own error messages can quote recipients' addresses, so they are never shown or logged: the log gets the status and error type only.
 
 ### Webhooks
 

@@ -50,7 +50,7 @@ The migration image reads the same file differently: Prisma's migration engine i
 
 Create these in one region, the same as the KMS key.
 
-1. **Network.** A VPC with private subnets in at least two availability zones for the tasks, the database and Redis, and public subnets for the load balancer. A NAT gateway: the worker calls vendor APIs and webhook destinations on the internet, and the web app calls Clerk and, for connection tests, the vendors.
+1. **Network.** A VPC with private subnets in at least two availability zones for the tasks, the database and Redis, and public subnets for the load balancer. A NAT gateway: the worker calls vendor APIs, webhook destinations and Resend (`api.resend.com`) on the internet, and the web app calls Clerk and, for connection tests, the vendors.
 2. **Security groups.** Load balancer: 443 from anywhere. Web tasks: 3000 from the load balancer only. Database: 5432 from the web, worker and migrate tasks only. Redis: 6379 from the web and worker tasks only.
 3. **RDS for PostgreSQL 16.** Encrypted storage, automated backups (step 4 of the Phase 3 plan covers restore drills), `rds.force_ssl` on (the default from PostgreSQL 15). The master user becomes the **owner** role: it owns the tables and is used only by the migration task. Then create the runtime role once, as the master user:
 
@@ -86,7 +86,10 @@ Every variable, which image needs it, and whether it is a secret. Secrets come f
 | `VALTREXIA_KEY_PROVIDER`                                                  |  ✓  |   ✓    |         |        | `aws-kms`                                                                                                       |
 | `VALTREXIA_KMS_KEY_ID`                                                    |  ✓  |   ✓    |         |        | The key's alias ARN, `arn:aws:kms:<region>:<account>:alias/valtrexia`                                           |
 | `AWS_REGION`                                                              |  ✓  |   ✓    |         |        | Optional; defaults to the key's region                                                                          |
-| `EMAIL_PROVIDER` and its key                                              |  ✓  |   ✓    |         |  key   | Set once the email provider is added (Phase 3, step 2)                                                          |
+| `EMAIL_PROVIDER`                                                          |  ✓  |   ✓    |         |        | `resend`                                                                                                        |
+| `RESEND_API_KEY`                                                          |     |   ✓    |         |   ✓    | A Resend API key with sending access only                                                                       |
+| `EMAIL_FROM`                                                              |     |   ✓    |         |        | `Valtrexia <alerts@yourmsp.com>`, on a domain verified in Resend                                                |
+| `EMAIL_REPLY_TO`                                                          |     |   ✓    |         |        | Optional                                                                                                        |
 | `SYNC_INTERVAL_MINUTES`                                                   |  ✓  |   ✓    |         |        | Optional, default 15. The same value on both                                                                    |
 | `SYNC_CONCURRENCY`, `SCHEDULER_TICK_SECONDS`, `NOTIFICATION_TICK_SECONDS` |     |   ✓    |         |        | Optional; defaults in the README's Worker section                                                               |
 | `RETENTION_*_DAYS`                                                        |     |   ✓    |         |        | Optional; defaults 90, 395 and 730                                                                              |

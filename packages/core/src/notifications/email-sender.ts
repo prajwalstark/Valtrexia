@@ -1,4 +1,5 @@
 import type { Logger } from "../logging/logger";
+import { ResendEmailSender } from "./resend";
 
 /**
  * Sending an email, whatever the provider. One implementation per provider
@@ -72,7 +73,13 @@ export class MemoryEmailSender implements EmailSender {
  * notification.
  */
 export function createEmailSenderFromEnv(
-  env: { NODE_ENV?: string | undefined; EMAIL_PROVIDER?: string | undefined },
+  env: {
+    NODE_ENV?: string | undefined;
+    EMAIL_PROVIDER?: string | undefined;
+    RESEND_API_KEY?: string | undefined;
+    EMAIL_FROM?: string | undefined;
+    EMAIL_REPLY_TO?: string | undefined;
+  },
   logger: Logger,
 ): EmailSender | null {
   const provider = env.EMAIL_PROVIDER?.trim() ?? "";
@@ -85,7 +92,25 @@ export function createEmailSenderFromEnv(
     }
     return new LogEmailSender(logger);
   }
-  throw new Error(`EMAIL_PROVIDER: unknown provider. Leave it empty, or set it to "log".`);
+  if (provider === "resend") {
+    const apiKey = env.RESEND_API_KEY?.trim();
+    if (!apiKey) throw new Error("EMAIL_PROVIDER=resend needs RESEND_API_KEY.");
+    if (!env.EMAIL_FROM?.trim()) {
+      throw new Error(
+        'EMAIL_PROVIDER=resend needs EMAIL_FROM: an address, or "Name <address>", on a domain verified in Resend.',
+      );
+    }
+    const replyTo = env.EMAIL_REPLY_TO?.trim();
+    return new ResendEmailSender({
+      apiKey,
+      from: env.EMAIL_FROM,
+      ...(replyTo ? { replyTo } : {}),
+      logger,
+    });
+  }
+  throw new Error(
+    `EMAIL_PROVIDER: unknown provider. Leave it empty, or set it to "resend" (or "log" outside production).`,
+  );
 }
 
 /** Bounds on an email channel's recipients. */

@@ -6,8 +6,10 @@ import {
   EmailSendError,
   LocalKeyProvider,
   MemoryEmailSender,
+  ResendEmailSender,
   Secret,
 } from "@valtrexia/core/server";
+import { FAKE_RESEND_KEY, fakeResend } from "@valtrexia/core/testing/fake-resend";
 import {
   createDb,
   createEmailChannel,
@@ -193,6 +195,43 @@ describe("email channels", () => {
       attempts: 2,
       lastError: "The email provider refused the sender address.",
     });
+  });
+
+  it("delivers through Resend: once, however often a delivery is retried", async () => {
+    const s = await setup({ timeZone: "America/New_York" });
+    await db.withTenant(s.tenantId, ({ tx }) => tx.incident.updateMany({ data: { closedAt: T0 } }));
+    await emailChannel(s.tenantId, ["alex@msp.example", "sam@msp.example"]);
+    await sync(s, at(1));
+
+    const resend = fakeResend();
+    const sender = new ResendEmailSender({
+      apiKey: FAKE_RESEND_KEY,
+      from: "Northwind Alerts <alerts@msp.example>",
+      fetch: resend.fetch,
+    });
+    // Resend is down for the first attempt; the outbox tries again later.
+    resend.failNext({ status: 503, name: "service_unavailable" });
+    expect(await deliverAll(s.tenantId, { emailSender: sender }, at(1))).toMatchObject([
+      { result: "retrying" },
+    ]);
+    const [waiting] = await db.withTenant(s.tenantId, ({ tx }) => tx.notificationBatch.findMany());
+    expect(waiting!.lastError).toBe("The email service had a problem. It will be tried again.");
+
+    expect(await deliverAll(s.tenantId, { emailSender: sender }, at(2))).toMatchObject([
+      { result: "sent" },
+    ]);
+    expect(resend.delivered).toHaveLength(1);
+    expect(resend.delivered[0]).toMatchObject({
+      from: "Northwind Alerts <alerts@msp.example>",
+      to: ["alex@msp.example", "sam@msp.example"],
+      subject: `${brand.name}: 1 new backup problem at Acme Dental`,
+    });
+    expect(resend.delivered[0]!.text).toContain("10 Nov, 15:00 GMT-5");
+    // Both attempts carried the same key, so a repeat could never send twice.
+    const keys = resend.requests.map((r) => r.headers.get("idempotency-key"));
+    expect(keys).toHaveLength(2);
+    expect(new Set(keys).size).toBe(1);
+    expect(keys[0]!.startsWith(`${waiting!.id}:`)).toBe(true);
   });
 
   it("the database refuses a webhook channel with no destination", async () => {
