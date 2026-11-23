@@ -342,6 +342,9 @@ describe("describeAuditEntry", () => {
     expect(say("workspace.deletion_cancelled", null, { reason: "owner_request" })).toBe(
       "Cancelled the workspace’s deletion",
     );
+    expect(say("workspace.exported", null, {})).toBe(
+      "Downloaded an export of the workspace’s data",
+    );
   });
 
   it("describes mutes: dated, open-ended, for a whole client, and what they closed", () => {

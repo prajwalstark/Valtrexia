@@ -56,6 +56,31 @@ export function WorkspaceSettingsView({
 
       <section
         className="mt-16 max-w-xl border-t border-line pt-8"
+        aria-labelledby="export-heading"
+      >
+        <h2 id="export-heading" className="text-lg font-semibold">
+          Export data
+        </h2>
+        <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+          One file with everything this workspace holds: members, integrations, clients, assets and
+          their settings, backup history, incidents, notification channels and the audit log. Vendor
+          keys, webhook addresses and the raw records vendors send are left out. Once an hour.
+        </p>
+        {canManage ? (
+          <a
+            href="/settings/export"
+            download
+            className="mt-5 inline-flex h-9 items-center rounded-md border border-line-strong px-4 text-sm font-medium hover:bg-surface"
+          >
+            Download export (.json.gz)
+          </a>
+        ) : (
+          <p className="mt-3 text-sm text-muted-foreground">Only workspace owners can export.</p>
+        )}
+      </section>
+
+      <section
+        className="mt-16 max-w-xl border-t border-line pt-8"
         aria-labelledby="delete-heading"
       >
         <h2 id="delete-heading" className="text-lg font-semibold">

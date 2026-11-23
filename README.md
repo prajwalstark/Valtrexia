@@ -263,6 +263,15 @@ No date in the app can be shown without a time zone: the formatting functions re
 
 **Grace period.** How long past its expected time a backup may be before it counts as missed, for every asset: 0 to 168 hours, 2 by default. Pages apply a new value at once; incidents follow from the next sync.
 
+### Exporting a workspace
+
+Owners can download everything the workspace holds from the Settings page: one gzipped JSON file (`GET /settings/export`) with the workspace's settings, members, integrations, clients and their vendor mappings, assets and their settings, backup results, incidents, notification channels and the audit log. Each record is listed under its section with its id, so references between them (an asset's client, a result's asset) can be followed.
+
+- **Left out:** vendor credentials (even encrypted), webhook URLs and signing secrets, and the raw records vendors sent with each result. A webhook channel shows its host, an email channel its recipients, an integration the last characters of its key, as the pages do.
+- **Every column is named** in `apps/web/lib/export-core.ts`: a column added to a table later is not exported until someone adds it there.
+- **One export per workspace per hour**, counted in Redis like the connection tests, and refused if Redis cannot answer. Technicians cannot export. Each export is written to the audit log, with who and from where, before the first byte is sent.
+- **Written as it is read**, a page of rows at a time, each page in its own short transaction, and compressed as it goes, so a large workspace is never held in memory. The file reflects the workspace over the seconds it takes to write.
+
 ### Deleting a workspace
 
 A workspace is deleted in two stages (decision 7), whether an owner asks for it on the Settings page (typing the workspace's name to confirm) or its organization is deleted in Clerk:

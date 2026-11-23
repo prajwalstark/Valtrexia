@@ -33,7 +33,7 @@ export function RequestDeletionForm({
         Syncing and notifications stop at once. After {holdDays} days, every client, asset, backup
         result, incident, saved key, notification channel and audit entry in this workspace is
         deleted for good. Until then you can cancel. Your organization and its members are not
-        affected.
+        affected. To keep a copy, download an export first.
       </p>
       <Label htmlFor={id} className="mt-5 block">
         Type <span className="font-semibold">{workspaceName}</span> to confirm

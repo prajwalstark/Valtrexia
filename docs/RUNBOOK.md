@@ -109,3 +109,5 @@ Normally an owner asks in Settings, or deleting the organization in Clerk starts
   ```
 
   Every table holding the workspace's data cascades from `tenants`. Backups still hold it until they expire.
+
+- **A copy of a workspace's data.** Owners download it themselves from Settings, once an hour (README, "Exporting a workspace"). There is no operator-side export; if an owner has lost access, restore their access in Clerk rather than exporting for them.

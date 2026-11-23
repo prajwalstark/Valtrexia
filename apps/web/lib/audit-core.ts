@@ -212,6 +212,8 @@ export function describeAuditEntry(
         ? `The organization was deleted; the workspace’s data will be deleted${when}`
         : `Scheduled the workspace for deletion${when}`;
     }
+    case "workspace.exported":
+      return "Downloaded an export of the workspace’s data";
     case "workspace.deletion_cancelled":
       return "Cancelled the workspace’s deletion";
     case "tenant.provisioned":

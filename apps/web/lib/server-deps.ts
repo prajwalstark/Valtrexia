@@ -63,6 +63,21 @@ function getConnectionTestLimiter(): RateLimiter {
   return connectionTestLimiter;
 }
 
+// One export per workspace per hour: plenty for taking a copy, and an
+// export reads everything the workspace has.
+const EXPORTS = { name: "workspace-export", limit: 1, windowMs: 3_600_000 };
+let exportLimiter: RateLimiter | undefined;
+
+/** The workspace export's limit, shared through Redis like the connection tests'. */
+export function getExportLimiter(): RateLimiter {
+  if (exportLimiter) return exportLimiter;
+  const redis = getRedis();
+  exportLimiter = redis
+    ? createRedisRateLimiter({ redis, ...EXPORTS })
+    : createRateLimiter(EXPORTS);
+  return exportLimiter;
+}
+
 /** This server's Redis, for the status endpoint; null in development without one. */
 export function getRedisForStatus(): Redis | null {
   return getRedis();
