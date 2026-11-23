@@ -707,6 +707,8 @@ Production runs from three container images built by the `Dockerfile` at the roo
 
 Both endpoints sit outside Clerk's middleware and need no session. CI builds the images and runs them as production would on every push (`docker/smoke/run.sh`).
 
+[docs/RUNBOOK.md](./docs/RUNBOOK.md) covers running it: deploying and rolling back, backups and the restore drill (`pnpm db:verify`), what to do about each operator alert, other incidents, rotating keys and secrets, and deleting a workspace by hand.
+
 ### Operator monitoring
 
 Alerts about the service itself, for whoever runs it. Tenants' own alerts are separate (see [Notifications](#notifications)). There are two layers, because a stopped worker cannot report its own death.
@@ -747,6 +749,7 @@ Alerts go by email to `OPERATOR_ALERT_EMAIL` (through the same provider as tenan
 | `pnpm db:generate`    | Regenerates the Prisma client                                                  |
 | `pnpm db:seed`        | Loads demo data through the real sync pipeline                                 |
 | `pnpm keys:rotate`    | Moves encrypted records to the current key                                     |
+| `pnpm db:verify`      | Checks a database (a restored backup) is safe to serve from: five checks       |
 | `docker/smoke/run.sh` | Builds the production images and runs them against TLS-only Postgres and Redis |
 
 ## Continuous integration

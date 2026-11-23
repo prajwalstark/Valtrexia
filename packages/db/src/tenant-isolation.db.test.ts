@@ -11,7 +11,14 @@ import {
   TENANT_TABLES,
   type SeededTenant,
 } from "../test/fixtures";
-import { createDb, InvalidTenantIdError, UnsafeDatabaseRoleError, type Db } from "./index";
+import {
+  createDb,
+  DEFINER_FUNCTIONS,
+  DEFINER_SEARCH_PATH,
+  InvalidTenantIdError,
+  UnsafeDatabaseRoleError,
+  type Db,
+} from "./index";
 
 const urls = inject("databaseUrls");
 
@@ -126,19 +133,10 @@ describe("catalog: every table is protected", () => {
       WHERE n.nspname = 'public' AND p.prosecdef
       ORDER BY p.proname
     `);
-    expect(result.rows.map((row) => row.proname)).toEqual([
-      "apply_retention",
-      "count_encrypted_records_by_key",
-      "fleet_health_counts",
-      "list_due_integrations",
-      "list_due_notification_batches",
-      "list_encrypted_records",
-      "provision_tenant",
-      "purge_due_tenants",
-      "resolve_tenant_id",
-    ]);
+    // The same list `pnpm db:verify` checks a restored database against.
+    expect(result.rows.map((row) => row.proname)).toEqual([...DEFINER_FUNCTIONS]);
     for (const row of result.rows) {
-      expect(row.proconfig, row.proname).toEqual(["search_path=pg_catalog, pg_temp"]);
+      expect(row.proconfig, row.proname).toEqual([DEFINER_SEARCH_PATH]);
       expect(row.public_can_execute, row.proname).toBe(false);
       expect(row.app_can_execute, row.proname).toBe(true);
     }

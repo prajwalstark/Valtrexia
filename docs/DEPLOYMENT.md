@@ -52,7 +52,7 @@ Create these in one region, the same as the KMS key.
 
 1. **Network.** A VPC with private subnets in at least two availability zones for the tasks, the database and Redis, and public subnets for the load balancer. A NAT gateway: the worker calls vendor APIs, webhook destinations and Resend (`api.resend.com`) on the internet, and the web app calls Clerk and, for connection tests, the vendors.
 2. **Security groups.** Load balancer: 443 from anywhere. Web tasks: 3000 from the load balancer only. Database: 5432 from the web, worker and migrate tasks only. Redis: 6379 from the web and worker tasks only.
-3. **RDS for PostgreSQL 16.** Encrypted storage, automated backups (step 4 of the Phase 3 plan covers restore drills), `rds.force_ssl` on (the default from PostgreSQL 15). The master user becomes the **owner** role: it owns the tables and is used only by the migration task. Then create the runtime role once, as the master user:
+3. **RDS for PostgreSQL 16.** Encrypted storage, automated backups with point-in-time recovery, kept at least 14 days, and deletion protection (restoring, and the quarterly restore drill, are in [RUNBOOK.md](./RUNBOOK.md#2-backups-and-restoring)), `rds.force_ssl` on (the default from PostgreSQL 15). The master user becomes the **owner** role: it owns the tables and is used only by the migration task. Then create the runtime role once, as the master user:
 
    ```sql
    CREATE ROLE valtrexia_app LOGIN PASSWORD '<generated>' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;

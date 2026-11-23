@@ -97,7 +97,7 @@ const WHAT_TO_CHECK: Record<OperatorCondition, string> = {
   integrations_failing:
     "Many integrations failing at once usually means a vendor outage or a network problem from the worker, not a problem in each workspace. Check the worker's log for the failure kinds.",
   integrations_overdue:
-    "Integrations are going unsynced. Check that a worker is running and that its scheduler ticks (its log says so every minute).",
+    "Integrations are going unsynced. Check that a worker is running (/api/status) and that its log shows syncs finishing.",
   notifications_failing:
     "Messages were given up on in the last hour. Check the email provider's settings and status, and the worker's log for delivery errors.",
   notifications_backlog:

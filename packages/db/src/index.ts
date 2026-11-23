@@ -89,3 +89,5 @@ export type {
   VendorClientMapping,
 } from "./generated/prisma/client";
 export { Prisma } from "./generated/prisma/client";
+export { APP_ROLE, DEFINER_FUNCTIONS, DEFINER_SEARCH_PATH, migrationNames } from "./catalog";
+export { roleProblems, verifyDatabase, type VerifyCheck, type VerifyOptions } from "./verify";

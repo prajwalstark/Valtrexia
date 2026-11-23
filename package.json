@@ -25,7 +25,8 @@
     "db:migrate": "pnpm --filter @valtrexia/db migrate",
     "db:check": "pnpm --filter @valtrexia/db migrate:check",
     "db:seed": "pnpm --filter @valtrexia/worker seed",
-    "keys:rotate": "pnpm --filter @valtrexia/worker keys:rotate"
+    "keys:rotate": "pnpm --filter @valtrexia/worker keys:rotate",
+    "db:verify": "pnpm --filter @valtrexia/worker db:verify"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",

@@ -152,6 +152,19 @@ docker run --rm "${RUN_AS_PROD[@]}" -e DATABASE_URL_OWNER="$OWNER_DB_PRISMA" "$M
   || fail "migrations did not apply"
 echo "ok: migrations applied over verified TLS"
 
+step "Database verification, as a restore drill would run it"
+docker run --rm "${RUN_AS_PROD[@]}" "${APP_ENV[@]}" "$WORKER" \
+  node --import tsx src/scripts/verify-database.ts --allow-empty >"$WORK/verify.log" 2>&1 \
+  || fail "db:verify failed on a freshly migrated database: $(cat "$WORK/verify.log")"
+grep -q "This database is safe to serve from." "$WORK/verify.log" || fail "$(cat "$WORK/verify.log")"
+echo "ok: all five checks pass on the migrated database, from the worker image"
+if docker run --rm "${RUN_AS_PROD[@]}" "${APP_ENV[@]}" "$WORKER" \
+  node --import tsx src/scripts/verify-database.ts >"$WORK/verify-empty.log" 2>&1; then
+  fail "db:verify called an empty database good without --allow-empty"
+fi
+grep -q "FAIL  encryption" "$WORK/verify-empty.log" || fail "$(cat "$WORK/verify-empty.log")"
+echo "ok: without --allow-empty, an empty database is not called good"
+
 STATUS_TOKEN="$(openssl rand -hex 24)"
 
 step "Web"

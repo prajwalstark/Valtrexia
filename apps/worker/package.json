@@ -8,7 +8,8 @@
     "start": "node --env-file-if-exists=../../.env --import tsx src/index.ts",
     "seed": "node --env-file-if-exists=../../.env --import tsx src/scripts/seed.ts",
     "keys:rotate": "node --env-file-if-exists=../../.env --import tsx src/scripts/rotate-keys.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "db:verify": "node --env-file-if-exists=../../.env --import tsx src/scripts/verify-database.ts"
   },
   "dependencies": {
     "@valtrexia/connectors": "workspace:*",
@@ -16,11 +17,11 @@
     "@valtrexia/db": "workspace:*",
     "bullmq": "^6.7.6",
     "ioredis": "6.0.0",
+    "pg": "^8.23.1",
     "tsx": "^4.23.15",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/pg": "^8.23.1",
-    "pg": "^8.23.1"
+    "@types/pg": "^8.23.1"
   }
 }

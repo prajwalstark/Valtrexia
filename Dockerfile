@@ -93,6 +93,9 @@ COPY packages/connectors/src packages/connectors/src
 COPY packages/connectors/tsconfig.json packages/connectors/
 COPY packages/db/src packages/db/src
 COPY packages/db/tsconfig.json packages/db/
+# Only the migrations' names are read, by `db:verify`, to know what a
+# correct database has.
+COPY packages/db/prisma/migrations packages/db/prisma/migrations
 COPY --from=build /repo/packages/db/src/generated packages/db/src/generated
 COPY apps/worker/src apps/worker/src
 COPY apps/worker/tsconfig.json apps/worker/
