@@ -14,3 +14,10 @@ onlyBuiltDependencies:
 peerDependencyRules:
   allowedVersions:
     eslint: "10"
+
+# Security fixes in dependencies of dependencies, until the package that
+# pins them moves on. Each is scoped to the one path that needs it.
+overrides:
+  # GHSA-7589-6fvf-x4pw (ReDoS in Schema.TemplateLiteral), fixed in 3.22.1.
+  # @prisma/config 7.10.1 pins effect 3.20.0; it is used only by Prisma's CLI.
+  "@prisma/config>effect": 3.22.4

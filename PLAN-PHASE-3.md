@@ -186,6 +186,7 @@ Each step's report will say which of its claims are tested and which are assumed
 
 Changes made during the build:
 
+- **A new advisory against `effect` (GHSA-7589-6fvf-x4pw) failed the weekly-style audit during step 4.** It reaches us only through Prisma's CLI (`@prisma/config` pins `effect` 3.20.0, and no newer Prisma is out). A pnpm override scoped to that one path moves it to 3.22.4, a patched release from a month ago; Prisma's CLI was checked to validate, generate, diff and migrate with it, in tests and in the migration image. Remove the override once Prisma moves on.
 - **`db:verify` runs as the runtime role**, not the owner, so it sees the restored database exactly as the app will. Prisma's migration table belongs to the owner, so a new definer function, `applied_migrations`, returns finished migrations' names and nothing else.
 - **The list of cross-tenant functions now lives in one place** (`packages/db/src/catalog.ts`), read by both the tenant-isolation test and `db:verify`, so the two cannot disagree.
 - **The encryption check is stricter than planned:** not one credential, but every key id that records are wrapped under must be configured, and one record per key must decrypt. An empty database fails it unless `--allow-empty` says it is a new deployment.
