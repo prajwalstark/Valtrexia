@@ -4,6 +4,7 @@ import { AddChannel } from "@/components/notifications/channel-form";
 import { NotificationsView } from "@/components/notifications/notifications-view";
 import {
   createEmailChannelAction,
+  createSyncroChannelAction,
   createWebhookChannelAction,
   deleteChannelAction,
   sendTestNotificationAction,
@@ -28,6 +29,7 @@ export default async function NotificationsPage() {
         <AddChannel
           webhookAction={createWebhookChannelAction}
           emailAction={createEmailChannelAction}
+          syncroAction={createSyncroChannelAction}
           emailAvailable={emailConfigured(process.env)}
         />
       }

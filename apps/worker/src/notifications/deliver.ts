@@ -21,6 +21,7 @@ import {
   type ClaimedBatch,
   type Db,
 } from "@valtrexia/db";
+import { sendToPsa } from "./psa";
 
 /**
  * Sends what the outbox holds.
@@ -59,6 +60,8 @@ export interface DeliveryDeps {
   resolver?: Resolver;
   /** How long one webhook request may take. Default 10 seconds. */
   timeoutMs?: number;
+  /** For tests: a stand-in PSA. */
+  psa?: { fetch?: typeof fetch; baseUrl?: string };
 }
 
 export interface DeliveryResult {
@@ -109,6 +112,13 @@ async function send(deps: DeliveryDeps, tenantId: string, batch: ClaimedBatch, n
     } satisfies BatchOutcome;
   }
   if (batch.channel.type === "email") return sendEmail(deps, batch);
+  if (batch.channel.type === "psa") {
+    try {
+      return await sendToPsa(deps, tenantId, batch, now);
+    } catch (error) {
+      return outcomeOfError(error);
+    }
+  }
   try {
     const destination = (
       await decryptChannelDestination({ tenantId }, deps.keyProvider, batch.channel)

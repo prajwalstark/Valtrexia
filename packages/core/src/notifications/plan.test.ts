@@ -8,6 +8,7 @@ import {
   MAX_DELIVERY_ATTEMPTS,
   nextAttemptAt,
   planIncidentMessages,
+  planPsaMessages,
   type ChannelPreferences,
   type IncidentChange,
 } from "./plan";
@@ -186,18 +187,42 @@ describe("messages", () => {
             openedAt: "2026-11-12T10:00:00.000Z",
             closedAt: null,
             lastBackupAt: "2026-11-11T06:00:00.000Z",
+            reason: null,
           },
         ],
         closed: [
           expect.objectContaining({
             incidentId: "i2",
             closedAt: "2026-11-12T12:00:00.000Z",
+            reason: "resolved",
           }) as unknown,
         ],
       },
     });
     // Survives serialization unchanged: what is stored is what is sent.
     expect(JSON.parse(JSON.stringify(payload))).toEqual(payload);
+  });
+
+  it("plans one PSA message per asset, including closings that were a decision", () => {
+    const psa = channel({ id: "psa", incidentTypes: ["failed", "missed"] });
+    const plan = planPsaMessages(psa, [
+      change({ incidentId: "i1", asset: { id: "a1", name: "SQL01" } }),
+      change({ incidentId: "i2", type: "missed", asset: { id: "a1", name: "SQL01" } }),
+      change({
+        incidentId: "i3",
+        event: "closed",
+        reason: "suppressed",
+        asset: { id: "a2", name: "FS01" },
+      }),
+      change({ incidentId: "i4", type: "stale", asset: { id: "a3", name: "DC01" } }),
+    ]);
+    expect(plan.map((m) => [m.assetId, m.changes.map((c) => c.incidentId)])).toEqual([
+      ["a2", ["i3"]],
+      ["a1", ["i1", "i2"]],
+    ]);
+    expect(
+      planPsaMessages({ ...psa, incidentTypes: ["failed"], enabled: false }, [change({})]),
+    ).toEqual([]);
   });
 
   it("describes an integration that became unhealthy, and one that recovered without the old error", () => {

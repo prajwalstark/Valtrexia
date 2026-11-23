@@ -430,6 +430,29 @@ describe("describeAuditEntry", () => {
     ).toBe("Deleted the webhook channel Ops");
   });
 
+  it("describes Syncro channels and their set-up, never a token", () => {
+    expect(
+      say("notification_channel.created", randomUUID(), {
+        type: "psa",
+        name: "Tickets",
+        provider: "syncro",
+        subdomain: "northwind",
+      }),
+    ).toBe("Connected the Syncro channel Tickets, at northwind.syncromsp.com");
+    expect(
+      say("notification_channel.disabled", randomUUID(), { type: "psa", name: "Tickets" }),
+    ).toBe("Turned off the Syncro channel Tickets");
+    expect(say("psa_mappings.updated", randomUUID(), { mapped: 3, unmapped: 1 })).toBe(
+      "Changed Syncro customers: matched 3 clients to Syncro customers, unmatched 1 client",
+    );
+    expect(say("psa_settings.updated", randomUUID(), { name: "Tickets" })).toBe(
+      "Changed the ticket settings of the Syncro channel Tickets",
+    );
+    expect(say("psa_credentials.replaced", randomUUID(), { name: "Tickets" })).toBe(
+      "Replaced the API token of the Syncro channel Tickets",
+    );
+  });
+
   it("describes people and the workspace", () => {
     expect(say("user.joined", USER, { role: "technician" })).toBe(
       "Terry Tech joined as technician",

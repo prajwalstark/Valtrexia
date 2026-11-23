@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { ReactNode } from "react";
 import { PageHeader } from "@/components/shell/page-header";
 import { Notice } from "@/components/ui/notice";
@@ -20,8 +21,17 @@ const KIND_LABEL: Record<Recent["kind"], string> = {
   report: "Monthly summary",
 };
 
-function destinationOf(channel: Channel): string {
-  const config = (channel.config ?? {}) as { host?: unknown; recipients?: unknown };
+function destinationOf(channel: Channel, clients: number): string {
+  const config = (channel.config ?? {}) as {
+    host?: unknown;
+    recipients?: unknown;
+    subdomain?: unknown;
+  };
+  if (channel.type === "psa") {
+    const where =
+      typeof config.subdomain === "string" ? ` at ${config.subdomain}.syncromsp.com` : "";
+    return `Opens tickets in Syncro${where}, for ${channel.psaMatched} of ${count(clients, "client")}`;
+  }
   if (channel.type === "webhook") {
     return typeof config.host === "string" ? `Sends to ${config.host}` : "Webhook";
   }
@@ -31,6 +41,9 @@ function destinationOf(channel: Channel): string {
 
 function hearsAbout(channel: Channel): string {
   const types = channel.incidentTypes.map((type) => TYPE_LABEL[type] ?? type).join(", ");
+  if (channel.type === "psa") {
+    return `A ticket per asset with ${types} backups, resolved when the asset recovers.`;
+  }
   const events = [
     channel.notifyOpened ? "when they start" : null,
     channel.notifyClosed ? "when resolved" : null,
@@ -104,7 +117,11 @@ export function NotificationsView({
                     <p className="flex flex-wrap items-baseline gap-x-2">
                       <span className="font-semibold">{channel.name}</span>
                       <span className="rounded-sm border border-line-strong px-1.5 text-xs text-muted-foreground">
-                        {channel.type === "webhook" ? "Webhook" : "Email"}
+                        {channel.type === "webhook"
+                          ? "Webhook"
+                          : channel.type === "psa"
+                            ? "Syncro"
+                            : "Email"}
                       </span>
                       {channel.enabled ? null : (
                         <span className="rounded-sm border border-status-warning/60 px-1.5 text-xs text-status-warning">
@@ -113,9 +130,17 @@ export function NotificationsView({
                       )}
                     </p>
                     <p className="mt-1 text-sm break-words text-muted-foreground">
-                      {destinationOf(channel)}
+                      {destinationOf(channel, page.clients)}
                     </p>
                     <p className="mt-0.5 text-sm text-subtle-foreground">{hearsAbout(channel)}</p>
+                    {channel.type === "psa" && canManage ? (
+                      <Link
+                        href={`/notifications/${channel.id}`}
+                        className="mt-1.5 inline-block text-sm text-iris-bright underline underline-offset-4 hover:text-foreground"
+                      >
+                        Match clients and ticket settings
+                      </Link>
+                    ) : null}
                   </div>
                   {canManage ? <div>{controlsSlot(channel)}</div> : null}
                 </div>

@@ -21,17 +21,18 @@ It is **not production-ready**. Clerk, the three vendors, AWS KMS and Resend hav
 
 **What has not been verified:**
 
-| Area            | State                                                                                                                                                            |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Clerk           | Never run against a live instance. Sign-in, MFA setup, organization creation and webhook delivery are untested end to end.                                       |
-| Signed-in pages | Because of the above, the pages were checked through a temporary preview route with seeded data, not behind a real session.                                      |
-| Datto BCDR      | The connector has never called Datto. Its response shapes are assumptions; see [Datto BCDR](#datto-bcdr) for the list to check.                                  |
-| Veeam VSPC      | Built from Veeam's published OpenAPI specification, but never run against a real console. See [Veeam Service Provider Console](#veeam-service-provider-console). |
-| Kaseya UniView  | Built from Kaseya's published OpenAPI specification, but never run against a real account. See [Kaseya UniView (Unitrends)](#kaseya-uniview-unitrends).          |
-| 3D view         | Only run with software rendering, never on a graphics card.                                                                                                      |
-| AWS KMS         | Built and tested against a stand-in KMS that behaves as AWS documents, never against AWS itself. See [Key management](#key-management).                          |
-| Resend (email)  | Built from Resend's API reference and tested against a stand-in built from it; no real email sent yet. See [Email](#email).                                      |
-| AWS deployment  | The images run as production would in CI; the guide has not been followed on AWS. See [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md).                                |
+| Area            | State                                                                                                                                                                 |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Clerk           | Never run against a live instance. Sign-in, MFA setup, organization creation and webhook delivery are untested end to end.                                            |
+| Signed-in pages | Because of the above, the pages were checked through a temporary preview route with seeded data, not behind a real session.                                           |
+| Datto BCDR      | The connector has never called Datto. Its response shapes are assumptions; see [Datto BCDR](#datto-bcdr) for the list to check.                                       |
+| Veeam VSPC      | Built from Veeam's published OpenAPI specification, but never run against a real console. See [Veeam Service Provider Console](#veeam-service-provider-console).      |
+| Kaseya UniView  | Built from Kaseya's published OpenAPI specification, but never run against a real account. See [Kaseya UniView (Unitrends)](#kaseya-uniview-unitrends).               |
+| 3D view         | Only run with software rendering, never on a graphics card.                                                                                                           |
+| AWS KMS         | Built and tested against a stand-in KMS that behaves as AWS documents, never against AWS itself. See [Key management](#key-management).                               |
+| Resend (email)  | Built from Resend's API reference and tested against a stand-in built from it; no real email sent yet. See [Email](#email).                                           |
+| Syncro (PSA)    | Built from Syncro's published OpenAPI document and tested against a stand-in built from it; never run against a real account. See [PSA tickets](#psa-tickets-syncro). |
+| AWS deployment  | The images run as production would in CI; the guide has not been followed on AWS. See [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md).                                     |
 
 **What is not built:** the items listed in [SECURITY.md](./SECURITY.md), and the rest of [Phase 3](./PLAN-PHASE-3.md).
 
@@ -42,7 +43,8 @@ It is **not production-ready**. Clerk, the three vendors, AWS KMS and Resend hav
 3. Verify a sending domain in Resend and set `EMAIL_PROVIDER=resend`, `RESEND_API_KEY` and `EMAIL_FROM` (see [Email](#email)), then send a test from the notifications page.
 4. Create the AWS KMS key and IAM permissions, and set `VALTREXIA_KEY_PROVIDER=aws-kms` (see [Key management](#key-management)). The local key provider refuses to run in production.
 5. Deploy as [docs/DEPLOYMENT.md](./docs/DEPLOYMENT.md) describes: Postgres with verified TLS (`sslmode=verify-full` for the apps, `sslmode=require&sslaccept=strict` for migrations) and Redis with TLS and a password (`rediss://`). The apps and the migration image refuse to start in production otherwise.
-6. Work through the open items in [SECURITY.md](./SECURITY.md).
+6. If Syncro tickets are wanted, connect a test Syncro account and check the items under [PSA tickets](#psa-tickets-syncro), above all that a new ticket does not email the customer.
+7. Work through the open items in [SECURITY.md](./SECURITY.md).
 
 ## Repository layout
 
@@ -575,7 +577,33 @@ A webhook channel `POST`s JSON to an https URL. Requests are signed following th
 
 A receiver should check the signature and refuse a timestamp more than five minutes from its own clock, so a captured request cannot be replayed. The signing secret is shown once, when the channel is created, and stored encrypted like vendor credentials. So is the URL, because webhook URLs often carry a token in the path. Nobody can read either back afterwards; the interface and the audit log show only the host.
 
-The body is `{ "type", "version", "timestamp", "data" }`, with `type` one of `incidents.changed`, `integration.unhealthy`, `integration.recovered`, `report.monthly` or `test`. A `report.monthly` body's shares are numbers from 0 to 1.
+The body is `{ "type", "version", "timestamp", "data" }`, with `type` one of `incidents.changed`, `integration.unhealthy`, `integration.recovered`, `report.monthly` or `test`. A `report.monthly` body's shares are numbers from 0 to 1. Each incident in an `incidents.changed` body has a `reason`: `null` for one that opened, `"resolved"` for one that closed.
+
+### PSA tickets (Syncro)
+
+A **Syncro** channel turns incidents into tickets in the MSP's own Syncro account: one ticket per asset with a problem, later problems on that asset added to it as comments, and the ticket moved to a chosen status (normally Resolved) when the asset has no open problem left. Owners connect it on the Notifications page with the account's subdomain and an API token, which is checked against Syncro before it is saved, stored encrypted like vendor keys, and never shown again.
+
+**Matching clients.** Tickets are opened only for clients matched to a Syncro customer, on the channel's set-up page. Customers are read live from Syncro; a customer with the same name as a client is offered as a suggestion, and nothing is matched until an owner saves. The same page sets the problem type of new tickets and the status for recovered assets, from the account's own lists, and replaces the token.
+
+**What a ticket says.** The subject names the problem, the asset and the client, with a short reference (`[ref 3f9a2c1b7d]`). Comments give the problem, when it began and the last good backup, in the workspace's time zone, with a link to the client when `APP_BASE_URL` is set. **Every comment is sent with `hidden` and `do_not_email` set**, so Syncro keeps it internal and does not email the customer. When a problem ends because someone muted, paused or archived the asset, the ticket says the problem is no longer tracked rather than that it was fixed, and closes.
+
+**Sent once, and in order.** Messages for a PSA channel are one per asset, and those for the same asset are sent strictly in order, so two workers never open two tickets for one asset; the database also allows only one open ticket per channel and asset. Each call to Syncro is recorded as soon as it succeeds, so a retry does only what is left. Creating a ticket is the one call Syncro gives no way to repeat safely, so the record is written first and the ticket's subject carries its reference: if the answer to a create is lost, the retry looks through the customer's recent tickets for that reference before creating another. A ticket closed or deleted in Syncro by hand is noticed when the next problem arrives, which then opens a new ticket.
+
+| Situation                                                | What happens                                                                    |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Syncro refuses the token, or the user lacks a permission | Retried on the usual schedule; the notifications page says to replace the token |
+| Syncro is down, slow, or limiting requests (429)         | Retried on the usual schedule                                                   |
+| Syncro refuses the ticket as invalid (422)               | Given up, with Syncro's own reason shown (for example, a required problem type) |
+| The client is no longer matched                          | Given up for that message; nothing is opened                                    |
+
+**What is not known yet**, to check on a real account before relying on it:
+
+- Whether creating a ticket emails the customer under the account's own notification settings. The comments are hidden and not emailed; the ticket's creation is Syncro's to announce, and its settings may do so.
+- Whether the account requires a problem type. If it does, choose one on the set-up page, or tickets are refused.
+- How Syncro refuses requests over its limit of 180 a minute per IP address. A 429 is assumed. A burst of problems across many assets spreads its tickets over several minutes.
+- Whether the "resolved" statuses this treats as closed (the chosen one, Resolved, Invoiced) match the account's workflow.
+
+The API token belongs to a Syncro user and carries that user's permissions: it needs to list customers, and to list, create, view and edit tickets. A user kept for this integration is better than a person's own.
 
 ### Sending to addresses a tenant typed in
 

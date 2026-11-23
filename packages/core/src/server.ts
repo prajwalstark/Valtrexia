@@ -80,3 +80,16 @@ export {
   REDIS_PREFIX,
   type Heartbeat,
 } from "./operator/keys";
+export {
+  failureFor as syncroFailureFor,
+  PsaError,
+  SYNCRO_SUBDOMAIN,
+  syncroBaseUrl,
+  SyncroClient,
+  syncroMessage,
+  type PsaCustomer,
+  type PsaTicket,
+  type SyncroClientOptions,
+  type SyncroCredentials,
+} from "./psa/syncro";
+export { isClosedStatus, refInSubject, ticketNews, ticketRef, ticketSubject } from "./psa/tickets";

@@ -84,6 +84,34 @@ export function planIncidentMessages(
   });
 }
 
+/**
+ * One message per asset for a PSA channel, since each asset has its own
+ * ticket. Unlike other channels, a PSA channel is also told when an incident
+ * closed because the asset was muted, paused or archived: its ticket must
+ * close too, and says why.
+ */
+export function planPsaMessages(
+  channel: ChannelPreferences,
+  changes: readonly IncidentChange[],
+): { channelId: string; assetId: string; changes: IncidentChange[] }[] {
+  if (!channel.enabled) return [];
+  const wanted = changes
+    .filter((change) => channel.incidentTypes.includes(change.type))
+    .sort(
+      (a, b) =>
+        a.openedAt.getTime() - b.openedAt.getTime() ||
+        a.event.localeCompare(b.event) ||
+        a.type.localeCompare(b.type),
+    );
+  const byAsset = new Map<string, IncidentChange[]>();
+  for (const change of wanted) {
+    const list = byAsset.get(change.asset.id) ?? [];
+    list.push(change);
+    byAsset.set(change.asset.id, list);
+  }
+  return [...byAsset].map(([assetId, list]) => ({ channelId: channel.id, assetId, changes: list }));
+}
+
 /** The channels to tell when an integration becomes unhealthy or recovers. */
 export function channelsForIntegrationHealth(
   channels: readonly ChannelPreferences[],
@@ -120,6 +148,8 @@ export interface IncidentPayloadEntry {
   openedAt: string;
   closedAt: string | null;
   lastBackupAt: string | null;
+  /** Why a closed incident closed: see IncidentChange. Null for one that opened. */
+  reason: "resolved" | "suppressed" | null;
 }
 
 export interface IncidentsPayload {
@@ -210,6 +240,7 @@ export function buildIncidentsPayload(input: {
     openedAt: change.openedAt.toISOString(),
     closedAt: iso(change.closedAt),
     lastBackupAt: iso(change.lastBackupAt),
+    reason: change.event === "closed" ? (change.reason ?? "resolved") : null,
   });
   return {
     type: "incidents.changed",

@@ -72,6 +72,27 @@ export {
 } from "./repositories/notifications";
 export { loadClientMonthReport, type LoadedClientReport } from "./repositories/reports";
 export {
+  assetHasOpenIncidents,
+  closePsaTicket,
+  countPsaMappings,
+  createPsaChannel,
+  decryptPsaCredentials,
+  listPsaMappings,
+  loadPsaChannel,
+  openPsaTicket,
+  parsePsaConfig,
+  psaCustomerFor,
+  recordPsaTicketCreated,
+  recordPsaTicketNews,
+  replacePsaCredentials,
+  setPsaMappings,
+  startPsaTicket,
+  updatePsaSettings,
+  type PsaChannelConfig,
+  type PsaMappingRow,
+  type PsaTicketRow,
+} from "./repositories/psa";
+export {
   ActorType,
   BackupStatus,
   IncidentType,

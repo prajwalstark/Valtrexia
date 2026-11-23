@@ -8,51 +8,9 @@ import { Label } from "@/components/ui/label";
 import { Notice } from "@/components/ui/notice";
 import type { ChannelState } from "@/lib/notifications-core";
 import { useFormAction } from "@/lib/use-form-action";
+import { Check, FieldError, TYPES, type FormAction } from "./form-parts";
+import { SyncroForm } from "./syncro-form";
 import { cn } from "@/lib/utils";
-
-type FormAction = (previous: ChannelState, formData: FormData) => Promise<ChannelState>;
-
-const TYPES = [
-  { value: "failed", label: "Failed backups" },
-  { value: "missed", label: "Missed backups" },
-  { value: "stale", label: "Backups past their SLA" },
-] as const;
-
-function FieldError({ id, message }: { id: string; message: string | undefined }) {
-  return message ? (
-    <p id={id} className="mt-1.5 text-sm text-destructive">
-      {message}
-    </p>
-  ) : null;
-}
-
-function Check({
-  name,
-  value,
-  label,
-  checked,
-  onChange,
-}: {
-  name: string;
-  value?: string;
-  label: string;
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-}) {
-  return (
-    <label className="flex items-center gap-2 text-sm">
-      <input
-        type="checkbox"
-        name={name}
-        value={value ?? "on"}
-        checked={checked}
-        onChange={(event) => onChange(event.target.checked)}
-        className="size-4 accent-[var(--color-iris)]"
-      />
-      {label}
-    </label>
-  );
-}
 
 /** Copies a value to the clipboard, and says so. */
 function CopyButton({ value }: { value: string }) {
@@ -255,13 +213,17 @@ function ChannelForm({
 export function AddChannel({
   webhookAction,
   emailAction,
+  syncroAction,
   emailAvailable,
 }: {
   webhookAction: FormAction;
   emailAction: FormAction;
+  syncroAction: FormAction;
   emailAvailable: boolean;
 }) {
-  const [kind, setKind] = useState<"webhook" | "email">(emailAvailable ? "email" : "webhook");
+  const [kind, setKind] = useState<"webhook" | "email" | "syncro">(
+    emailAvailable ? "email" : "webhook",
+  );
   // A new key gives a fresh, empty form after a channel is created.
   const [round, setRound] = useState(0);
 
@@ -272,7 +234,7 @@ export function AddChannel({
         aria-label="Kind of channel"
         className="inline-flex rounded-md border border-line-strong p-0.5"
       >
-        {(["email", "webhook"] as const).map((option) => (
+        {(["email", "webhook", "syncro"] as const).map((option) => (
           <button
             key={option}
             type="button"
@@ -286,12 +248,18 @@ export function AddChannel({
                 : "text-muted-foreground hover:text-foreground",
             )}
           >
-            {option === "email" ? "Email" : "Webhook"}
+            {option === "email" ? "Email" : option === "webhook" ? "Webhook" : "Syncro tickets"}
           </button>
         ))}
       </div>
       <div className="mt-5">
-        {kind === "email" && !emailAvailable ? (
+        {kind === "syncro" ? (
+          <SyncroForm
+            key={`syncro-${round}`}
+            action={syncroAction}
+            onDone={() => setRound((n) => n + 1)}
+          />
+        ) : kind === "email" && !emailAvailable ? (
           <Notice kind="info" className="max-w-xl">
             Email is not set up on this server yet, so email channels cannot be added. Webhooks work
             now.

@@ -13,6 +13,7 @@ import {
 } from "@valtrexia/core/server";
 import {
   ChannelNameTakenError,
+  countPsaMappings,
   createEmailChannel,
   createWebhookChannel,
   deleteNotificationChannel,
@@ -45,9 +46,12 @@ export interface NotificationDeps {
   /** Replaces DNS. For tests. */
   resolver?: Resolver;
   now?: Date;
+  /** For tests: a stand-in PSA. */
+  psa?: { fetch?: typeof fetch; baseUrl?: string };
 }
 
-export type ChannelField = "name" | "url" | "recipients" | "incidentTypes";
+export type ChannelField =
+  "name" | "url" | "recipients" | "incidentTypes" | "subdomain" | "apiToken";
 
 export type ChannelState =
   | { status: "idle" }
@@ -58,8 +62,8 @@ export type ChannelState =
 const OWNERS_ONLY = "Only workspace owners can manage notification channels.";
 const NOT_FOUND = "That channel no longer exists.";
 
-const nameSchema = z.string().trim().min(1).max(80);
-const typesSchema = z
+export const nameSchema = z.string().trim().min(1).max(80);
+export const typesSchema = z
   .array(z.enum(RAISED_INCIDENT_TYPES))
   .min(1)
   .transform((types) => [...new Set(types)]);
@@ -265,7 +269,9 @@ export const RECENT_PER_CHANNEL = 5;
 
 export interface NotificationsPage {
   timeZone: string;
-  channels: (ChannelSummary & { recent: RecentBatch[] })[];
+  /** Clients in the workspace, for "matched N of M" on PSA channels. */
+  clients: number;
+  channels: (ChannelSummary & { recent: RecentBatch[]; psaMatched: number })[];
 }
 
 /** Everything the notifications page shows. Anyone may look; nothing secret is in it. */
@@ -280,9 +286,15 @@ export async function getNotificationsPage(
     });
     const channels = await listNotificationChannels(context);
     const recent = await listRecentBatches(context, { perChannel: RECENT_PER_CHANNEL });
+    const matched = await countPsaMappings(context);
     return {
       timeZone: tenant.timeZone,
-      channels: channels.map((channel) => ({ ...channel, recent: recent.get(channel.id) ?? [] })),
+      clients: await context.tx.client.count(),
+      channels: channels.map((channel) => ({
+        ...channel,
+        recent: recent.get(channel.id) ?? [],
+        psaMatched: matched.get(channel.id) ?? 0,
+      })),
     };
   });
 }

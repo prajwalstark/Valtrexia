@@ -7,6 +7,7 @@ import {
   channelsForMonthlyReport,
   nextAttemptAt,
   planIncidentMessages,
+  planPsaMessages,
   RAISED_INCIDENT_TYPES,
   type ChannelPreferences,
   type ClientMonthReport,
@@ -36,7 +37,7 @@ import { recordAudit } from "./audit";
  * exactly when the change it reports does. The worker sends it later.
  */
 
-function channelContext(tenantId: string, channelId: string) {
+export function channelContext(tenantId: string, channelId: string) {
   return { tenantId, recordId: channelId, purpose: "notification-channel" } as const;
 }
 
@@ -295,11 +296,14 @@ export async function decryptChannelDestination(
   )) as Secret<WebhookDestination>;
 }
 
-async function channelPreferences({ tx }: TenantContext): Promise<ChannelPreferences[]> {
+async function channelPreferences({
+  tx,
+}: TenantContext): Promise<(ChannelPreferences & { type: "webhook" | "email" | "psa" })[]> {
   const rows = await tx.notificationChannel.findMany({
     where: { enabled: true },
     select: {
       id: true,
+      type: true,
       enabled: true,
       incidentTypes: true,
       notifyOpened: true,
@@ -350,12 +354,29 @@ export async function queueIncidentNotifications(
   });
   const told = new Set(already.map((d) => `${d.channelId}|${d.incidentId}|${d.event}`));
 
-  const messages = channels.flatMap((channel) =>
-    planIncidentMessages(
-      [channel],
-      input.changes.filter((c) => !told.has(`${channel.id}|${c.incidentId}|${c.event}`)),
-    ),
+  // A PSA channel tickets only clients mapped to a customer in the PSA.
+  const psaIds = channels.filter((channel) => channel.type === "psa").map((channel) => channel.id);
+  const mapped = new Set(
+    psaIds.length === 0
+      ? []
+      : (
+          await tx.psaCustomerMapping.findMany({
+            where: { channelId: { in: psaIds } },
+            select: { channelId: true, clientId: true },
+          })
+        ).map((row) => `${row.channelId}|${row.clientId}`),
   );
+  const messages: { channelId: string; assetId?: string; changes: IncidentChange[] }[] =
+    channels.flatMap((channel) => {
+      const fresh = input.changes.filter(
+        (c) => !told.has(`${channel.id}|${c.incidentId}|${c.event}`),
+      );
+      if (channel.type !== "psa") return planIncidentMessages([channel], fresh);
+      return planPsaMessages(
+        channel,
+        fresh.filter((c) => mapped.has(`${channel.id}|${c.client.id}`)),
+      );
+    });
   if (messages.length === 0) return 0;
 
   const name = await workspaceName(context);
@@ -365,6 +386,7 @@ export async function queueIncidentNotifications(
         tenantId,
         channelId: message.channelId,
         kind: "incidents",
+        ...(message.assetId ? { assetId: message.assetId } : {}),
         payload: buildIncidentsPayload({
           workspaceName: name,
           at: input.now,
@@ -496,11 +518,15 @@ export interface ClaimedBatch {
   kind: "incidents" | "integration" | "test" | "report";
   payload: unknown;
   attempts: number;
+  /** For a PSA channel's incident message: the asset it is about. */
+  assetId: string | null;
   channel: {
     id: string;
     name: string;
-    type: "webhook" | "email";
+    type: "webhook" | "email" | "psa";
     enabled: boolean;
+    /** Incident types it hears about. */
+    incidentTypes: string[];
     secretEnc: unknown;
     /** What may be shown: for email, the recipients. */
     config: unknown;
@@ -522,6 +548,30 @@ export async function claimNotificationBatch(
   { tx }: TenantContext,
   input: { batchId: string; now: Date; leaseMs: number },
 ): Promise<ClaimedBatch | null> {
+  // Messages about one asset to one PSA channel go in order: a later one
+  // waits while an earlier one is still to be sent, so two workers never
+  // write to the same ticket at once, nor open two.
+  const target = await tx.notificationBatch.findUnique({
+    where: { id: input.batchId },
+    select: { channelId: true, assetId: true, createdAt: true },
+  });
+  if (!target) return null;
+  if (target.assetId) {
+    const earlier = await tx.notificationBatch.findFirst({
+      where: {
+        channelId: target.channelId,
+        assetId: target.assetId,
+        status: "pending",
+        id: { not: input.batchId },
+        OR: [
+          { createdAt: { lt: target.createdAt } },
+          { createdAt: target.createdAt, id: { lt: input.batchId } },
+        ],
+      },
+      select: { id: true },
+    });
+    if (earlier) return null;
+  }
   const taken = await tx.notificationBatch.updateMany({
     where: { id: input.batchId, status: "pending", nextAttemptAt: { lte: input.now } },
     data: {
@@ -537,8 +587,17 @@ export async function claimNotificationBatch(
       kind: true,
       payload: true,
       attempts: true,
+      assetId: true,
       channel: {
-        select: { id: true, name: true, type: true, enabled: true, secretEnc: true, config: true },
+        select: {
+          id: true,
+          name: true,
+          type: true,
+          enabled: true,
+          incidentTypes: true,
+          secretEnc: true,
+          config: true,
+        },
       },
       tenant: { select: { timeZone: true } },
     },

@@ -8,7 +8,8 @@
     "./server": "./src/server.ts",
     "./format": "./src/format.ts",
     "./testing/fake-kms": "./src/crypto/fake-kms.ts",
-    "./testing/fake-resend": "./src/notifications/resend-fixtures.ts"
+    "./testing/fake-resend": "./src/notifications/resend-fixtures.ts",
+    "./testing/fake-syncro": "./src/psa/syncro-fixtures.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

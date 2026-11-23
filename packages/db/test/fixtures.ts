@@ -28,6 +28,8 @@ export const TENANT_TABLES = [
   "notification_channels",
   "notification_batches",
   "notification_deliveries",
+  "psa_customer_mappings",
+  "psa_tickets",
 ] as const;
 
 /**
@@ -40,6 +42,7 @@ export const NO_DELETE_TABLES: readonly string[] = [
   "audit_logs",
   "notification_batches",
   "notification_deliveries",
+  "psa_tickets",
 ];
 
 /**
@@ -136,6 +139,27 @@ export async function seedTenant(db: Db, label: string): Promise<SeededTenant> {
       },
     });
 
+    // On the seeded channel: the isolation tests expect one row per table.
+    const psaMapping = await tx.psaCustomerMapping.create({
+      data: {
+        tenantId,
+        channelId: channel.id,
+        clientId: client.id,
+        externalCustomerId: "100",
+        externalCustomerName: `${label} Dental`,
+      },
+    });
+    const psaTicket = await tx.psaTicket.create({
+      data: {
+        tenantId,
+        channelId: channel.id,
+        assetId: asset.id,
+        externalCustomerId: "100",
+        externalTicketId: "1",
+        subject: "Backup failed",
+      },
+    });
+
     return {
       users: user.id,
       integrations: integration.id,
@@ -148,6 +172,8 @@ export async function seedTenant(db: Db, label: string): Promise<SeededTenant> {
       notification_channels: channel.id,
       notification_batches: batch.id,
       notification_deliveries: delivery.id,
+      psa_customer_mappings: psaMapping.id,
+      psa_tickets: psaTicket.id,
     } satisfies RowIds;
   });
 

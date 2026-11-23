@@ -79,6 +79,8 @@ enum IncidentType {
 enum NotificationChannelType {
   webhook
   email
+  /// A professional services automation tool: tickets in the MSP's PSA.
+  psa
 
   @@map("notification_channel_type")
 }
@@ -167,6 +169,8 @@ model Tenant {
   notificationChannels   NotificationChannel[]
   notificationBatches    NotificationBatch[]
   notificationDeliveries NotificationDelivery[]
+  psaCustomerMappings    PsaCustomerMapping[]
+  psaTickets             PsaTicket[]
 
   @@map("tenants")
 }
@@ -242,6 +246,8 @@ model Client {
   vendorClientMappings VendorClientMapping[]
   assets               Asset[]
 
+  psaCustomerMappings PsaCustomerMapping[]
+
   @@unique([tenantId, name])
   @@unique([tenantId, id])
   @@map("clients")
@@ -311,6 +317,7 @@ model Asset {
   mutedBy       User?          @relation(fields: [tenantId, mutedByUserId], references: [tenantId, id], onDelete: NoAction)
   backupResults BackupResult[]
   incidents     Incident[]
+  psaTickets    PsaTicket[]
 
   @@unique([integrationId, vendorAssetId])
   @@unique([tenantId, id])
@@ -424,9 +431,11 @@ model NotificationChannel {
   createdAt               DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt               DateTime                @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  tenant     Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  batches    NotificationBatch[]
-  deliveries NotificationDelivery[]
+  tenant           Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  batches          NotificationBatch[]
+  deliveries       NotificationDelivery[]
+  customerMappings PsaCustomerMapping[]
+  tickets          PsaTicket[]
 
   @@unique([tenantId, name])
   @@unique([tenantId, id])
@@ -449,6 +458,9 @@ model NotificationBatch {
   /// Sanitized reason the last attempt failed.
   lastError     String?                 @map("last_error")
   sentAt        DateTime?               @map("sent_at") @db.Timestamptz(3)
+  /// For a PSA channel: the one asset this message is about. Messages about
+  /// the same asset are sent in order. Not a foreign key: only an ordering key.
+  assetId       String?                 @map("asset_id") @db.Uuid
   createdAt     DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt     DateTime                @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -458,6 +470,7 @@ model NotificationBatch {
 
   @@unique([tenantId, id])
   @@index([tenantId, channelId, createdAt(sort: Desc)])
+  @@index([tenantId, channelId, assetId, createdAt])
   @@map("notification_batches")
 }
 
@@ -515,4 +528,59 @@ model OperatorAlert {
 
   @@index([openedAt(sort: Desc)])
   @@map("operator_alerts")
+}
+
+/// Which customer in a PSA each client is, for one PSA channel. Chosen by an owner.
+model PsaCustomerMapping {
+  id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId             String   @map("tenant_id") @db.Uuid
+  channelId            String   @map("channel_id") @db.Uuid
+  clientId             String   @map("client_id") @db.Uuid
+  /// The customer's id in the PSA.
+  externalCustomerId   String   @map("external_customer_id")
+  /// Its name when it was chosen, for showing.
+  externalCustomerName String   @map("external_customer_name")
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant  Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  channel NotificationChannel @relation(fields: [tenantId, channelId], references: [tenantId, id], onDelete: Cascade)
+  client  Client              @relation(fields: [tenantId, clientId], references: [tenantId, id], onDelete: Cascade)
+
+  @@unique([channelId, clientId])
+  @@unique([tenantId, id])
+  @@index([tenantId, clientId])
+  @@map("psa_customer_mappings")
+}
+
+/// A ticket opened in a PSA for an asset's problems. At most one open per
+/// channel and asset; it closes when the asset's last incident closes.
+model PsaTicket {
+  id                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId             String    @map("tenant_id") @db.Uuid
+  channelId            String    @map("channel_id") @db.Uuid
+  assetId              String    @map("asset_id") @db.Uuid
+  externalCustomerId   String    @map("external_customer_id")
+  /// The PSA's ticket id. Null while it is being created: a retry then looks
+  /// for the ticket in the PSA before creating another.
+  externalTicketId     String?   @map("external_ticket_id")
+  externalTicketNumber String?   @map("external_ticket_number")
+  subject              String
+  /// When the create request was first made.
+  createStartedAt      DateTime  @default(now()) @map("create_started_at") @db.Timestamptz(3)
+  /// The last message whose news was written to the ticket.
+  lastBatchId          String?   @map("last_batch_id") @db.Uuid
+  closedAt             DateTime? @map("closed_at") @db.Timestamptz(3)
+  /// "resolved": we closed it. "closed_in_psa": someone closed or deleted it there first.
+  closeReason          String?   @map("close_reason")
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant  Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  channel NotificationChannel @relation(fields: [tenantId, channelId], references: [tenantId, id], onDelete: Cascade)
+  asset   Asset               @relation(fields: [tenantId, assetId], references: [tenantId, id], onDelete: Cascade)
+
+  @@unique([tenantId, id])
+  @@index([tenantId, channelId, assetId])
+  @@map("psa_tickets")
 }

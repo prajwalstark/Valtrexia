@@ -34,6 +34,12 @@ type Param = string | string[] | undefined;
 const first = (value: Param) => (Array.isArray(value) ? value[0] : value);
 
 /** Reads a filter from the page's query string, falling back to the default for anything unrecognized. */
+/** A channel's kind as people say it. */
+function channelKind(type: unknown): string {
+  if (type === "psa") return "Syncro";
+  return typeof type === "string" && /^[a-z]{1,20}$/.test(type) ? type : "notification";
+}
+
 export function parseAuditFilter(params: Record<string, Param>): AuditFilter {
   const category = first(params.category) ?? "";
   const page = Number(first(params.page));
@@ -187,19 +193,36 @@ export function describeAuditEntry(
     case "notification_channel.created": {
       const host = text(meta.host);
       const recipients = number(meta.recipients);
+      const subdomain = text(meta.subdomain);
+      if (meta.type === "psa") {
+        return `Connected the Syncro channel ${text(meta.name) ?? "?"}${subdomain ? `, at ${subdomain}.syncromsp.com` : ""}`;
+      }
       const where = host
         ? `, sending to ${host}`
         : recipients !== null
           ? `, sending to ${count(recipients, "address", "addresses")}`
           : "";
-      return `Added the ${text(meta.type) ?? "notification"} channel ${text(meta.name) ?? "?"}${where}`;
+      return `Added the ${channelKind(meta.type)} channel ${text(meta.name) ?? "?"}${where}`;
     }
     case "notification_channel.enabled":
-      return `Turned on the ${text(meta.type) ?? "notification"} channel ${text(meta.name) ?? "?"}`;
+      return `Turned on the ${channelKind(meta.type)} channel ${text(meta.name) ?? "?"}`;
     case "notification_channel.disabled":
-      return `Turned off the ${text(meta.type) ?? "notification"} channel ${text(meta.name) ?? "?"}`;
+      return `Turned off the ${channelKind(meta.type)} channel ${text(meta.name) ?? "?"}`;
     case "notification_channel.deleted":
-      return `Deleted the ${text(meta.type) ?? "notification"} channel ${text(meta.name) ?? "?"}`;
+      return `Deleted the ${channelKind(meta.type)} channel ${text(meta.name) ?? "?"}`;
+    case "psa_mappings.updated": {
+      const mapped = number(meta.mapped) ?? 0;
+      const unmapped = number(meta.unmapped) ?? 0;
+      const parts = [
+        mapped > 0 ? `matched ${count(mapped, "client")} to Syncro customers` : null,
+        unmapped > 0 ? `unmatched ${count(unmapped, "client")}` : null,
+      ].filter(Boolean);
+      return `Changed Syncro customers: ${parts.join(", ") || "no change"}`;
+    }
+    case "psa_settings.updated":
+      return `Changed the ticket settings of the Syncro channel ${text(meta.name) ?? "?"}`;
+    case "psa_credentials.replaced":
+      return `Replaced the API token of the Syncro channel ${text(meta.name) ?? "?"}`;
     case "encryption.rewrapped":
       return entry.targetType === "notification_channel"
         ? `Moved the saved destination of the channel ${text(meta.name) ?? "?"} to a new encryption key`
