@@ -23,15 +23,15 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   const isOwner = session.role === "owner";
 
   return (
-    <div className="min-h-dvh md:grid md:grid-cols-[14.5rem_minmax(0,1fr)]">
+    <div className="min-h-dvh md:grid md:grid-cols-[14.5rem_minmax(0,1fr)] print:block">
       <a
         href="#main"
-        className="sr-only focus:not-sr-only focus:absolute focus:top-3 focus:left-3 focus:z-50 focus:rounded-md focus:bg-surface-raised focus:px-3 focus:py-2"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-3 focus:left-3 focus:z-50 focus:rounded-md focus:bg-surface-raised focus:px-3 focus:py-2 print:hidden"
       >
         Skip to content
       </a>
 
-      <aside className="hidden border-r border-line md:flex md:flex-col md:px-3 md:py-5">
+      <aside className="hidden border-r border-line md:flex md:flex-col md:px-3 md:py-5 print:hidden">
         <Link href="/dashboard" className="self-start rounded-md px-3 py-1">
           <Wordmark />
         </Link>
@@ -45,7 +45,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
       </aside>
 
       <div className="flex min-w-0 flex-col">
-        <div className="border-b border-line px-4 pt-3 pb-2 md:hidden">
+        <div className="border-b border-line px-4 pt-3 pb-2 md:hidden print:hidden">
           <div className="flex items-center justify-between gap-3">
             <Link href="/dashboard" className="inline-flex rounded-md">
               <Wordmark />
@@ -57,11 +57,13 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
           </div>
         </div>
 
-        <Sightline overview={overview} now={now} />
+        <div className="print:hidden">
+          <Sightline overview={overview} now={now} />
+        </div>
 
-        <main id="main" className="flex-1 px-4 py-8 md:px-8 md:py-10">
+        <main id="main" className="flex-1 px-4 py-8 md:px-8 md:py-10 print:p-0">
           {workspace.deletion ? (
-            <Notice kind="error" className="mb-8 max-w-3xl">
+            <Notice kind="error" className="mb-8 max-w-3xl print:hidden">
               This workspace will be deleted on{" "}
               {formatDate(workspace.deletion.deleteAfter, workspace.timeZone)}. Syncing and
               notifications have stopped.{" "}

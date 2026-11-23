@@ -22,6 +22,7 @@ const channel = (overrides: Partial<ChannelPreferences> = {}): ChannelPreference
   notifyOpened: true,
   notifyClosed: true,
   notifyIntegrationHealth: true,
+  notifyMonthlyReport: true,
   ...overrides,
 });
 

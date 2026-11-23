@@ -52,6 +52,8 @@ export interface DeliveryDeps {
   outboundPolicy: OutboundPolicy;
   /** How email is sent, or null when this server has no email set up. */
   emailSender: EmailSender | null;
+  /** Where the web app is served, for links in emails. */
+  appBaseUrl?: string | undefined;
   now?: () => Date;
   /** Replaces DNS. For tests. */
   resolver?: Resolver;
@@ -141,6 +143,7 @@ async function sendEmail(deps: DeliveryDeps, batch: ClaimedBatch): Promise<Batch
     const email = renderNotificationEmail(batch.payload as NotificationPayload, {
       timeZone: batch.timeZone,
       channelName: batch.channel.name,
+      ...(deps.appBaseUrl ? { appBaseUrl: deps.appBaseUrl } : {}),
     });
     await deps.emailSender.send({ to, ...email, idempotencyKey: batch.id });
     return { status: "sent" };

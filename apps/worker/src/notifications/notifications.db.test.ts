@@ -140,6 +140,7 @@ const ALL: ChannelPreferencesInput = {
   notifyOpened: true,
   notifyClosed: true,
   notifyIntegrationHealth: true,
+  notifyMonthlyReport: true,
 };
 
 async function setup(vendor: ScriptedVendor) {

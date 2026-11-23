@@ -1,7 +1,12 @@
 import { brand } from "../brand";
-import { count, formatDateTime } from "../format";
+import { count, formatDateTime, formatMonth, formatShare } from "../format";
 import type { RaisedIncidentType } from "../rules/incidents";
-import type { IncidentPayloadEntry, NotificationPayload } from "./plan";
+import type {
+  IncidentPayloadEntry,
+  MonthlyReportClient,
+  MonthlyReportPayload,
+  NotificationPayload,
+} from "./plan";
 
 /**
  * A notification as an email: a subject, a plain-text body and an HTML body
@@ -55,13 +60,16 @@ function byClient(entries: readonly IncidentPayloadEntry[]): [string, IncidentPa
 
 interface Section {
   heading: string;
-  groups: [string, string[]][];
+  /** A heading per group (a client), its lines, and optionally a link for the heading. */
+  groups: [string, string[], (string | undefined)?][];
 }
 
 function layout(input: {
   subject: string;
   intro: string;
   sections: Section[];
+  /** A closing paragraph after the sections. */
+  outro?: string;
   timeZone: string;
   channelName: string;
 }): RenderedEmail {
@@ -73,12 +81,14 @@ function layout(input: {
     ...input.sections.flatMap((section) => [
       "",
       section.heading.toUpperCase(),
-      ...section.groups.flatMap(([client, lines]) => [
+      ...section.groups.flatMap(([client, lines, href]) => [
         "",
         client,
         ...lines.map((line) => `  - ${line}`),
+        ...(href ? [`  ${href}`] : []),
       ]),
     ]),
+    ...(input.outro ? ["", input.outro] : []),
     "",
     "--",
     footer,
@@ -92,13 +102,18 @@ function layout(input: {
         `<h2 style="font-size:16px;margin:24px 0 8px">${escapeHtml(section.heading)}</h2>` +
         section.groups
           .map(
-            ([client, lines]) =>
-              `<p style="margin:12px 0 4px;font-weight:600">${escapeHtml(client)}</p><ul style="margin:0;padding-left:20px">${lines
+            ([client, lines, href]) =>
+              `<p style="margin:12px 0 4px;font-weight:600">${
+                href
+                  ? `<a href="${escapeHtml(href)}" style="color:#4b3fbf">${escapeHtml(client)}</a>`
+                  : escapeHtml(client)
+              }</p><ul style="margin:0;padding-left:20px">${lines
                 .map((line) => `<li>${escapeHtml(line)}</li>`)
                 .join("")}</ul>`,
           )
           .join(""),
     ),
+    ...(input.outro ? [`<p style="margin-top:24px">${escapeHtml(input.outro)}</p>`] : []),
     `<p style="margin-top:32px;color:#5b6475;font-size:13px">${escapeHtml(footer)}</p>`,
     "</body></html>",
   ].join("");
@@ -106,13 +121,17 @@ function layout(input: {
   return { subject: oneLine(input.subject), text, html };
 }
 
+/** Most clients listed by name in a monthly summary email. */
+export const MAX_EMAIL_REPORT_CLIENTS = 25;
+
 /**
  * @param timeZone The workspace's time zone, for every date in the email.
  * @param channelName Named in the footer, so a recipient knows why they got it.
+ * @param appBaseUrl Where the app is served, for links; without it, there are none.
  */
 export function renderNotificationEmail(
   payload: NotificationPayload,
-  options: { timeZone: string; channelName: string },
+  options: { timeZone: string; channelName: string; appBaseUrl?: string },
 ): RenderedEmail {
   const { timeZone, channelName } = options;
   const when = (iso: string | null) => (iso ? formatDateTime(new Date(iso), timeZone) : null);
@@ -188,6 +207,8 @@ export function renderNotificationEmail(
         channelName,
       });
     }
+    case "report.monthly":
+      return renderMonthlyReport(payload, { ...options, workspace });
     case "test":
       return layout({
         subject: `${brand.name}: test notification`,
@@ -197,4 +218,78 @@ export function renderNotificationEmail(
         channelName,
       });
   }
+}
+
+function renderMonthlyReport(
+  payload: MonthlyReportPayload,
+  options: { timeZone: string; channelName: string; appBaseUrl?: string; workspace: string },
+): RenderedEmail {
+  const { month, clients, totals } = payload.data;
+  const monthName = formatMonth(month);
+  const base = options.appBaseUrl?.replace(/\/+$/, "");
+  const link = (path: string) => (base ? `${base}${path}` : undefined);
+
+  if (totals.clients === 0) {
+    return layout({
+      subject: `${brand.name}: backup summary for ${monthName}`,
+      intro: `No client assets were being watched in ${options.workspace} in ${monthName}.`,
+      sections: [],
+      timeZone: options.timeZone,
+      channelName: options.channelName,
+    });
+  }
+
+  const needsLook = (client: MonthlyReportClient) =>
+    client.onSchedule < 1 || client.withinSla < 1 || client.backups.failed > 0;
+  const attention = clients.filter(needsLook);
+  const listed = attention.slice(0, MAX_EMAIL_REPORT_CLIENTS);
+  const unlisted = attention.length - listed.length + payload.data.omittedClients;
+  const fine = totals.clients - attention.length - payload.data.omittedClients;
+
+  const line = (client: MonthlyReportClient) => {
+    const parts = [
+      `On schedule ${formatShare(client.onSchedule)} of days, within SLA ${formatShare(client.withinSla)}`,
+      client.backups.failed > 0 ? count(client.backups.failed, "failed backup") : null,
+      client.incidentsOpened > 0 ? count(client.incidentsOpened, "incident") : null,
+    ].filter(Boolean);
+    return `${parts.join("; ")}. ${count(client.assets, "asset")}.`;
+  };
+
+  const outro = [
+    unlisted > 0 ? `${count(unlisted, "more client")} also had problems.` : null,
+    fine > 0
+      ? fine === totals.clients
+        ? "Every client was on schedule every day, with no failed backups."
+        : `${count(fine, "other client")} ${fine === 1 ? "was" : "were"} on schedule every day, with no failed backups.`
+      : null,
+    base ? `Each client's full report: ${link("/dashboard")}` : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return layout({
+    subject: `${brand.name}: backup summary for ${monthName}`,
+    intro:
+      `In ${monthName}, ${options.workspace}'s ${count(totals.clients, "client")} ` +
+      `(${count(totals.assets, "asset")}) were on schedule ${formatShare(totals.onSchedule!)} of days ` +
+      `and within SLA ${formatShare(totals.withinSla!)}. ` +
+      `${count(totals.backups.completed, "backup")} completed and ${totals.backups.failed} failed; ` +
+      `${count(totals.incidentsOpened, "incident")} ${totals.incidentsOpened === 1 ? "was" : "were"} opened.`,
+    sections:
+      listed.length > 0
+        ? [
+            {
+              heading: "Least reliable",
+              groups: listed.map((client) => [
+                client.name,
+                [line(client)],
+                link(`/clients/${encodeURIComponent(client.id)}/report?month=${month}`),
+              ]),
+            },
+          ]
+        : [],
+    ...(outro ? { outro } : {}),
+    timeZone: options.timeZone,
+    channelName: options.channelName,
+  });
 }

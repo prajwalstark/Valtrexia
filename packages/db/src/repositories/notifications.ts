@@ -2,11 +2,14 @@ import { randomUUID } from "node:crypto";
 import {
   buildIncidentsPayload,
   buildIntegrationHealthPayload,
+  buildMonthlyReportPayload,
   channelsForIntegrationHealth,
+  channelsForMonthlyReport,
   nextAttemptAt,
   planIncidentMessages,
   RAISED_INCIDENT_TYPES,
   type ChannelPreferences,
+  type ClientMonthReport,
   type IncidentChange,
   type NotificationPayload,
   type RaisedIncidentType,
@@ -53,6 +56,7 @@ export const channelSummarySelect = {
   notifyOpened: true,
   notifyClosed: true,
   notifyIntegrationHealth: true,
+  notifyMonthlyReport: true,
   config: true,
   createdAt: true,
 } satisfies Prisma.NotificationChannelSelect;
@@ -66,6 +70,7 @@ export interface ChannelPreferencesInput {
   notifyOpened: boolean;
   notifyClosed: boolean;
   notifyIntegrationHealth: boolean;
+  notifyMonthlyReport: boolean;
 }
 
 export class ChannelNameTakenError extends Error {
@@ -203,7 +208,7 @@ export async function setNotificationChannelEnabled(
 export interface RecentBatch {
   id: string;
   channelId: string;
-  kind: "incidents" | "integration" | "test";
+  kind: "incidents" | "integration" | "test" | "report";
   status: "pending" | "sent" | "failed";
   attempts: number;
   /** A message we wrote about the last failed attempt. */
@@ -300,6 +305,7 @@ async function channelPreferences({ tx }: TenantContext): Promise<ChannelPrefere
       notifyOpened: true,
       notifyClosed: true,
       notifyIntegrationHealth: true,
+      notifyMonthlyReport: true,
     },
   });
   return rows.map((row) => ({
@@ -420,6 +426,48 @@ export async function queueIntegrationHealthNotifications(
   return channels.length;
 }
 
+/**
+ * Queues last month's summary for every channel that wants it, and records
+ * the month as sent, in one transaction: two workers racing for the same
+ * workspace queue it once. Returns how many messages were queued, or null
+ * if the month had already been queued.
+ */
+export async function queueMonthlyReportNotifications(
+  context: TenantContext,
+  input: {
+    month: string;
+    now: Date;
+    reports: readonly { client: { id: string; name: string }; report: ClientMonthReport }[];
+  },
+): Promise<number | null> {
+  const claimed = await context.tx.tenant.updateMany({
+    where: {
+      id: context.tenantId,
+      OR: [{ lastReportDigestMonth: null }, { lastReportDigestMonth: { not: input.month } }],
+    },
+    data: { lastReportDigestMonth: input.month },
+  });
+  if (claimed.count === 0) return null;
+  const channels = channelsForMonthlyReport(await channelPreferences(context));
+  if (channels.length === 0) return 0;
+  const payload = buildMonthlyReportPayload({
+    workspaceName: await workspaceName(context),
+    at: input.now,
+    month: input.month,
+    reports: input.reports,
+  }) as unknown as Prisma.InputJsonValue;
+  await context.tx.notificationBatch.createMany({
+    data: channels.map((channel) => ({
+      tenantId: context.tenantId,
+      channelId: channel.id,
+      kind: "report" as const,
+      payload,
+      nextAttemptAt: input.now,
+    })),
+  });
+  return channels.length;
+}
+
 /** Queues a test message for one channel. Returns false if the tenant has no such channel. */
 export async function queueTestNotification(
   context: TenantContext,
@@ -445,7 +493,7 @@ export async function queueTestNotification(
 
 export interface ClaimedBatch {
   id: string;
-  kind: "incidents" | "integration" | "test";
+  kind: "incidents" | "integration" | "test" | "report";
   payload: unknown;
   attempts: number;
   channel: {

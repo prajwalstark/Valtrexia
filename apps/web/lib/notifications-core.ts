@@ -147,6 +147,7 @@ interface ChannelInput {
   notifyOpened: unknown;
   notifyClosed: unknown;
   notifyIntegrationHealth: unknown;
+  notifyMonthlyReport: unknown;
 }
 
 /** The fields every kind of channel has, checked the same way for each. */
@@ -165,6 +166,7 @@ function commonFields(input: ChannelInput, fieldErrors: Partial<Record<ChannelFi
       notifyOpened: on(input.notifyOpened),
       notifyClosed: on(input.notifyClosed),
       notifyIntegrationHealth: on(input.notifyIntegrationHealth),
+      notifyMonthlyReport: on(input.notifyMonthlyReport),
     },
   };
 }

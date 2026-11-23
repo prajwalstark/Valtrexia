@@ -41,6 +41,7 @@ const ALL: ChannelPreferencesInput = {
   notifyOpened: true,
   notifyClosed: true,
   notifyIntegrationHealth: true,
+  notifyMonthlyReport: true,
 };
 
 /** One client, one asset whose last backup was 40 hours before T0: missed, once synced. */

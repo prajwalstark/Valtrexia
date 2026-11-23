@@ -23,6 +23,7 @@ export const DEFINER_FUNCTIONS = [
   "list_due_integrations",
   "list_due_notification_batches",
   "list_encrypted_records",
+  "list_report_digest_tenants",
   "provision_tenant",
   "purge_due_tenants",
   "resolve_tenant_id",

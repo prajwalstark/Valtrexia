@@ -229,6 +229,21 @@ How status is shown:
 
 The vendor's raw payload and anything about credentials are never sent to the browser; the queries name the columns they return. The logic is in `apps/web/lib/dashboard-core.ts` and is tested against Postgres.
 
+## Client reports
+
+Each client page links to a **monthly report**: one calendar month of the client's backups, written to be handed to the client. It opens on the last full month; arrows move between the current month and the twelve before it, which is as far back as backup results are kept. Anyone in the workspace can open it.
+
+- **Four figures:** the share of days the client's assets were on schedule, the share within their SLA, backups completed and failed, and incidents opened and resolved with the typical (median) time to resolve.
+- **One row per asset**, least reliable first, with a square per day: the day's worst backup; a missed day (an outlined cross) when a backup was due and none had completed; or an empty square when none was due. Then each asset's shares and counts.
+- **Incidents by type**, how the figures are measured, and which assets were left out (paused, archived or muted indefinitely) and why.
+- **Print or save as PDF** from the page's button. Printing gives dark ink on white paper on landscape A4, without the app's navigation; each status keeps its own glyph, so a black-and-white printout still reads. There is no server-side PDF, which would mean running a browser in production.
+
+**How a day is judged.** Each asset is judged at the end of each day, in the workspace's time zone, by the same rules as the dashboard: _on schedule_ if its last completed backup (success or warning) is no older than its expected interval plus the workspace's grace period, _within SLA_ if it is no older than its SLA. So a weekly backup is scored against its weekly schedule rather than marked down for the six days in between, and the report agrees with what the dashboard showed at the time. Today is judged as of now, and the month in progress says its figures are not final. Days before an asset was first seen are not counted. A day's length follows the clock, so the 23- and 25-hour days when clocks change are judged at their real ends.
+
+**What it cannot know.** Asset settings have no history: an asset is left out, and its schedule and SLA applied, as they are now, for the whole month. An asset muted for part of a month is counted for all of it.
+
+The figures are built by one pure function (`packages/core/src/reports/client-month.ts`), tested against fixed months with gaps, weekly schedules, long backups and clock changes, and loaded by `loadClientMonthReport` in `packages/db`. The latest completed backup before the month is found with a single grouped query, however long the asset's history.
+
 ## Incidents page
 
 Every incident in the workspace, across clients, in three views:
@@ -454,7 +469,7 @@ The demo vendor is available only when `VALTREXIA_ENABLE_MOCK=true`, and never w
 - **Several workers.** Any number of worker processes can run. The tick is a single schedule held in Redis, not one per process.
 - **Shutdown.** On `SIGTERM` or `SIGINT` the worker stops taking new jobs, lets running syncs finish, then exits.
 - **Safety at startup.** It refuses to start if connected to Postgres as a privileged role, or with invalid configuration, and says which setting is wrong without printing its value. In production it also refuses unencrypted connections: Postgres must use `sslmode=verify-full`, and Redis a `rediss://` URL with a password. The web app checks its database URL the same way.
-- **Maintenance.** Every six hours (and at startup) one worker applies retention, across all tenants, in batches.
+- **Maintenance.** Every six hours (and at startup) one worker queues the monthly summaries that are due, then applies retention, across all tenants, in batches.
 
 Finding what is due is the system's one cross-tenant read. It goes through a SQL function that returns ids only; each sync then runs inside its own tenant. A queued job carries two ids and nothing else: no names, no credentials.
 
@@ -464,6 +479,7 @@ Finding what is due is the system's one cross-tenant read. It goes through a SQL
 | `SYNC_CONCURRENCY`           | 5       | Integrations synced at the same time by one process                                      |
 | `SCHEDULER_TICK_SECONDS`     | 60      | How often the scheduler looks for due integrations                                       |
 | `LOG_LEVEL`                  | info    | Worker log verbosity                                                                     |
+| `APP_BASE_URL`               | unset   | Where the web app is served, for links in emails. Without it, emails have no links       |
 | `RETENTION_RAW_PAYLOAD_DAYS` | 90      | Vendor payloads stored with results are emptied after this. Minimum 7                    |
 | `RETENTION_RESULT_DAYS`      | 395     | Backup results are deleted after this (13 months). Minimum 30                            |
 | `RETENTION_AUDIT_DAYS`       | 730     | Audit entries are deleted after this (24 months). Minimum 90                             |
@@ -497,12 +513,14 @@ When incidents open or close, or an integration becomes unhealthy or recovers, t
 
 **The Notifications page** lists every channel, where it sends, what it hears about, and how its last five messages fared: sent, waiting, retrying (with when and why), or not delivered. Owners add channels, send a test message, turn a channel off and on, and delete it; technicians see the same list without the controls. Every change is audited. Changing what a channel hears about means deleting it and adding it again; there is no edit form yet.
 
-**What is sent, and to whom.** A channel chooses which incident types it hears about (failed, missed, stale), whether it hears about openings, closings or both, and whether it hears about integration health.
+**What is sent, and to whom.** A channel chooses which incident types it hears about (failed, missed, stale), whether it hears about openings, closings or both, whether it hears about integration health, and whether it gets the monthly summary.
 
 - **One message per sync, not per asset.** A sync that opens forty incidents because a client's appliance died sends each channel one message listing all forty. Over 100 changes are split into messages of 100.
 - **Never the same thing twice.** Each channel is told about each event of each incident once. The sync checks before queuing, and a unique key on the delivery record enforces it whatever a retry or a crash does.
 - **Nothing about decisions.** An incident closed because someone muted the asset, or the vendor paused or archived it, is not reported. A brief sync failure that clears by itself is not reported either: an integration is reported once when it becomes unhealthy (four failures in a row, or a rejected key), and once when it recovers.
 - **Names and times, nothing else.** A message names the workspace, client, asset, incident type and times. It never contains credentials or a vendor's raw payload.
+
+**The monthly summary.** In the first seven days of each month, in the workspace's time zone, each channel that wants it is sent one message about the month before: the workspace's overall figures and every client's, least reliable first, with the same measures as the [client reports](#client-reports). By email it lists up to 25 clients that had a problem, each linked to its report when `APP_BASE_URL` is set, and says how many were fine; a webhook gets every client's figures (up to 500). It is queued once per month: the month is recorded in the same transaction as the messages, so two workers cannot both queue it. A workspace whose first week passes without the worker running (an outage longer than that) skips that month's summary rather than getting it late. Choosing whom it goes to is the MSP's: summaries are not sent to end clients.
 
 **How it is sent.** Messages are written to an outbox table in the same transaction as the change they report, so a message exists exactly when its change does. A worker job, every 30 seconds by default, finds the messages that are due and sends them.
 
@@ -557,7 +575,7 @@ A webhook channel `POST`s JSON to an https URL. Requests are signed following th
 
 A receiver should check the signature and refuse a timestamp more than five minutes from its own clock, so a captured request cannot be replayed. The signing secret is shown once, when the channel is created, and stored encrypted like vendor credentials. So is the URL, because webhook URLs often carry a token in the path. Nobody can read either back afterwards; the interface and the audit log show only the host.
 
-The body is `{ "type", "version", "timestamp", "data" }`, with `type` one of `incidents.changed`, `integration.unhealthy`, `integration.recovered` or `test`.
+The body is `{ "type", "version", "timestamp", "data" }`, with `type` one of `incidents.changed`, `integration.unhealthy`, `integration.recovered`, `report.monthly` or `test`. A `report.monthly` body's shares are numbers from 0 to 1.
 
 ### Sending to addresses a tenant typed in
 

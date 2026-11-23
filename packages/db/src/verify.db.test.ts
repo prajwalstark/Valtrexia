@@ -107,6 +107,7 @@ beforeAll(async () => {
         notifyOpened: true,
         notifyClosed: true,
         notifyIntegrationHealth: true,
+        notifyMonthlyReport: true,
       },
       actorUserId: null,
     });

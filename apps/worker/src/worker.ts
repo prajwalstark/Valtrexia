@@ -56,9 +56,16 @@ export interface WorkerOptions {
   outboundPolicy?: OutboundPolicy;
   /** How email is sent, or null when this server has no email set up. */
   emailSender?: EmailSender | null;
+  /** Where the web app is served, for links in emails. */
+  appBaseUrl?: string | undefined;
   dattoBaseUrl?: string | undefined;
   /** How long old data is kept. Default: decision 8's periods. */
   retention?: RetentionPolicy;
+  /**
+   * Whether maintenance queues the monthly summaries. Default true. Tests
+   * that share a database turn it off, so their clock leaves others alone.
+   */
+  monthlyReports?: boolean;
   /** How often maintenance runs. Default 6 hours. */
   maintenanceEveryHours?: number;
   /** Where alerts about the service itself go. Default: nowhere (logged). */
@@ -122,6 +129,7 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
     logger,
     outboundPolicy: options.outboundPolicy ?? {},
     emailSender: options.emailSender ?? null,
+    ...(options.appBaseUrl ? { appBaseUrl: options.appBaseUrl } : {}),
     ...(options.now ? { now: options.now } : {}),
     ...(options.resolver ? { resolver: options.resolver } : {}),
   };
@@ -134,8 +142,11 @@ export async function startWorker(options: WorkerOptions): Promise<RunningWorker
         .catch(() => undefined);
     try {
       const result = await runMaintenance(
-        { db, logger },
-        { retention: options.retention ?? DEFAULT_RETENTION },
+        { db, logger, ...(options.now ? { now: options.now } : {}) },
+        {
+          retention: options.retention ?? DEFAULT_RETENTION,
+          monthlyReports: options.monthlyReports ?? true,
+        },
       );
       await record(true);
       return result;

@@ -97,6 +97,86 @@ export function lastDayKeys(now: Date, days: number, timeZone: string): string[]
   });
 }
 
+/**
+ * The first moment of a calendar day (YYYY-MM-DD) in a time zone: local
+ * midnight, as an instant. Where the clocks skip midnight, the first moment
+ * that exists that day.
+ */
+export function startOfDay(key: string, timeZone: string): Date {
+  const [year, month, day] = key.split("-").map(Number) as [number, number, number];
+  const wall = Date.UTC(year, month - 1, day);
+  // The zone's offset near that moment, applied twice so a change of offset
+  // on that very day is accounted for.
+  let instant = wall - offsetAt(wall, timeZone);
+  instant = wall - offsetAt(instant, timeZone);
+  // If midnight did not exist, the result lands on the previous day; step to
+  // the first hour that does.
+  while (dayKey(new Date(instant), timeZone) < key) instant += HOUR;
+  return new Date(instant);
+}
+
+/** The zone's offset from UTC at an instant, in milliseconds. */
+function offsetAt(instant: number, timeZone: string): number {
+  const parts = formatter(
+    timeZone,
+    "offset",
+    {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    },
+    "en-CA",
+  ).formatToParts(new Date(instant));
+  const get = (type: string) => Number(parts.find((part) => part.type === type)?.value);
+  const asUtc = Date.UTC(
+    get("year"),
+    get("month") - 1,
+    get("day"),
+    get("hour"),
+    get("minute"),
+    get("second"),
+  );
+  return asUtc - Math.floor(instant / 1000) * 1000;
+}
+
+/** The calendar days of a month (YYYY-MM), as day keys, first to last. */
+export function daysOfMonth(month: string): string[] {
+  const [year, number] = month.split("-").map(Number) as [number, number];
+  const length = new Date(Date.UTC(year, number, 0)).getUTCDate();
+  return Array.from({ length }, (_, index) => `${month}-${String(index + 1).padStart(2, "0")}`);
+}
+
+/** A month written as YYYY-MM, from 2000 to 2999. */
+export function isMonthKey(value: string): boolean {
+  return /^2\d{3}-(0[1-9]|1[0-2])$/.test(value);
+}
+
+/** The month (YYYY-MM) a moment falls in, in a time zone. */
+export function monthKey(date: Date, timeZone: string): string {
+  return dayKey(date, timeZone).slice(0, 7);
+}
+
+/** The month before or after a month: shiftMonth("2026-01", -1) is "2025-12". */
+export function shiftMonth(month: string, by: number): string {
+  const [year, number] = month.split("-").map(Number) as [number, number];
+  const shifted = new Date(Date.UTC(year, number - 1 + by, 1));
+  return shifted.toISOString().slice(0, 7);
+}
+
+/** "October 2026". */
+export function formatMonth(month: string): string {
+  const [year, number] = month.split("-").map(Number) as [number, number];
+  return new Intl.DateTimeFormat("en-GB", {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(year, number - 1, 1)));
+}
+
 /** "just now", "5 minutes ago", "3 hours ago", "2 days ago", then a date. */
 export function timeAgo(date: Date, now: Date, timeZone: string): string {
   const elapsed = now.getTime() - date.getTime();
@@ -158,4 +238,21 @@ export function formatDayKey(key: string): string {
 /** "1 asset", "3 assets". */
 export function count(n: number, singular: string, plural: string = `${singular}s`): string {
   return `${n} ${n === 1 ? singular : plural}`;
+}
+
+/**
+ * A share as a percentage to one decimal place: "96.8%", "100%", "0%".
+ * Rounded down, so anything short of all of it never reads as 100%.
+ */
+export function formatShare(share: number): string {
+  const tenths = Math.floor(share * 1000 + 1e-9);
+  return `${tenths % 10 === 0 ? tenths / 10 : (tenths / 10).toFixed(1)}%`;
+}
+
+/** A length of time given in hours: "under an hour", "4 hours", "2.5 days". */
+export function formatHours(hours: number): string {
+  if (hours < 1) return "under an hour";
+  if (hours < 48) return count(Math.round(hours), "hour");
+  const days = Math.round((hours / 24) * 10) / 10;
+  return `${days} days`;
 }

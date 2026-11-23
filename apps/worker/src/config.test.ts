@@ -109,4 +109,20 @@ describe("worker configuration", () => {
       expect(text).not.toContain("fixture-not-a-url-with-secret");
     }
   });
+
+  it("takes the app's address for links in emails, without a trailing slash", () => {
+    expect(parseConfig(base).appBaseUrl).toBeUndefined();
+    expect(parseConfig({ ...base, APP_BASE_URL: " " }).appBaseUrl).toBeUndefined();
+    expect(parseConfig({ ...base, APP_BASE_URL: "https://app.example.com/" }).appBaseUrl).toBe(
+      "https://app.example.com",
+    );
+    for (const bad of [
+      "ftp://app.example.com",
+      "app.example.com",
+      "https://a.example.com/?x=1",
+      "https://u:p@a.example.com",
+    ]) {
+      expect(() => parseConfig({ ...base, APP_BASE_URL: bad }), bad).toThrow(/APP_BASE_URL/);
+    }
+  });
 });

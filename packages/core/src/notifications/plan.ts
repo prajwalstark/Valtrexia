@@ -1,3 +1,4 @@
+import type { ClientMonthReport } from "../reports/client-month";
 import type { RaisedIncidentType } from "../rules/incidents";
 
 /**
@@ -13,6 +14,7 @@ export interface ChannelPreferences {
   notifyOpened: boolean;
   notifyClosed: boolean;
   notifyIntegrationHealth: boolean;
+  notifyMonthlyReport: boolean;
 }
 
 export interface IncidentChange {
@@ -89,6 +91,13 @@ export function channelsForIntegrationHealth(
   return channels.filter((channel) => channel.enabled && channel.notifyIntegrationHealth);
 }
 
+/** The channels to send the monthly summary to. */
+export function channelsForMonthlyReport(
+  channels: readonly ChannelPreferences[],
+): ChannelPreferences[] {
+  return channels.filter((channel) => channel.enabled && channel.notifyMonthlyReport);
+}
+
 // ---------------------------------------------------------------------------
 // Messages
 // ---------------------------------------------------------------------------
@@ -147,7 +156,44 @@ export interface TestPayload {
   data: { workspace: { name: string }; message: string };
 }
 
-export type NotificationPayload = IncidentsPayload | IntegrationHealthPayload | TestPayload;
+/** One client's month, as the monthly summary carries it. Shares are 0 to 1. */
+export interface MonthlyReportClient {
+  id: string;
+  name: string;
+  /** Assets counted: not paused, archived or muted indefinitely. */
+  assets: number;
+  onSchedule: number;
+  withinSla: number;
+  backups: { completed: number; failed: number };
+  incidentsOpened: number;
+}
+
+export interface MonthlyReportPayload {
+  type: "report.monthly";
+  version: typeof NOTIFICATION_PAYLOAD_VERSION;
+  timestamp: string;
+  data: {
+    workspace: { name: string };
+    /** YYYY-MM, in the workspace's time zone. */
+    month: string;
+    /** Clients with at least one counted asset, least reliable first. */
+    clients: MonthlyReportClient[];
+    /** Clients left off the list above because it reached its limit. */
+    omittedClients: number;
+    totals: {
+      clients: number;
+      assets: number;
+      /** Averages over every counted asset; null with none. */
+      onSchedule: number | null;
+      withinSla: number | null;
+      backups: { completed: number; failed: number };
+      incidentsOpened: number;
+    };
+  };
+}
+
+export type NotificationPayload =
+  IncidentsPayload | IntegrationHealthPayload | TestPayload | MonthlyReportPayload;
 
 const iso = (date: Date | null) => (date ? date.toISOString() : null);
 
@@ -208,6 +254,62 @@ export function buildTestPayload(input: { workspaceName: string; at: Date }): Te
     data: {
       workspace: { name: input.workspaceName },
       message: "This is a test notification. If you can read it, this channel works.",
+    },
+  };
+}
+
+/** Most clients listed in one monthly summary; the totals still cover them all. */
+export const MAX_REPORT_CLIENTS = 500;
+
+export function buildMonthlyReportPayload(input: {
+  workspaceName: string;
+  at: Date;
+  month: string;
+  reports: readonly { client: { id: string; name: string }; report: ClientMonthReport }[];
+}): MonthlyReportPayload {
+  const clients = input.reports
+    .filter(({ report }) => report.summary.assets > 0)
+    .map(({ client, report }) => ({
+      id: client.id,
+      name: client.name,
+      assets: report.summary.assets,
+      onSchedule: report.summary.onSchedule!,
+      withinSla: report.summary.withinSla!,
+      backups: { ...report.summary.backups },
+      incidentsOpened: Object.values(report.incidents.opened).reduce((a, b) => a + b, 0),
+    }))
+    .sort(
+      (a, b) =>
+        a.onSchedule - b.onSchedule ||
+        a.withinSla - b.withinSla ||
+        b.backups.failed - a.backups.failed ||
+        a.name.localeCompare(b.name, "en", { sensitivity: "base" }),
+    );
+  const assets = clients.reduce((sum, client) => sum + client.assets, 0);
+  const weighted = (pick: (client: MonthlyReportClient) => number) =>
+    assets === 0
+      ? null
+      : clients.reduce((sum, client) => sum + pick(client) * client.assets, 0) / assets;
+  return {
+    type: "report.monthly",
+    version: NOTIFICATION_PAYLOAD_VERSION,
+    timestamp: input.at.toISOString(),
+    data: {
+      workspace: { name: input.workspaceName },
+      month: input.month,
+      clients: clients.slice(0, MAX_REPORT_CLIENTS),
+      omittedClients: Math.max(0, clients.length - MAX_REPORT_CLIENTS),
+      totals: {
+        clients: clients.length,
+        assets,
+        onSchedule: weighted((client) => client.onSchedule),
+        withinSla: weighted((client) => client.withinSla),
+        backups: {
+          completed: clients.reduce((sum, client) => sum + client.backups.completed, 0),
+          failed: clients.reduce((sum, client) => sum + client.backups.failed, 0),
+        },
+        incidentsOpened: clients.reduce((sum, client) => sum + client.incidentsOpened, 0),
+      },
     },
   };
 }

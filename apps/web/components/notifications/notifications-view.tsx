@@ -17,6 +17,7 @@ const KIND_LABEL: Record<Recent["kind"], string> = {
   incidents: "Incidents",
   integration: "Integration",
   test: "Test",
+  report: "Monthly summary",
 };
 
 function destinationOf(channel: Channel): string {
@@ -37,6 +38,7 @@ function hearsAbout(channel: Channel): string {
   const parts = [
     events.length > 0 ? `${types} backups, ${events.join(" and ")}` : null,
     channel.notifyIntegrationHealth ? "integrations that fail or recover" : null,
+    channel.notifyMonthlyReport ? "the monthly summary" : null,
   ].filter(Boolean);
   return parts.length > 0 ? `Hears about ${parts.join("; ")}.` : "Hears about nothing.";
 }

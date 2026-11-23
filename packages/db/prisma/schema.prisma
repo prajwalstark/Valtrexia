@@ -91,6 +91,8 @@ enum NotificationBatchKind {
   integration
   /// A test message someone asked for.
   test
+  /// The monthly summary of every client's backups.
+  report
 
   @@map("notification_batch_kind")
 }
@@ -137,20 +139,22 @@ enum ActorType {
 
 /// One managed service provider. Maps 1:1 to a Clerk organization.
 model Tenant {
-  id                  String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  clerkOrgId          String                @unique @map("clerk_org_id")
-  name                String
+  id                    String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clerkOrgId            String                @unique @map("clerk_org_id")
+  name                  String
   /// Hours added to an asset's expected frequency before it counts as missed.
-  graceHours          Int                   @default(2) @map("grace_hours")
+  graceHours            Int                   @default(2) @map("grace_hours")
   /// IANA time zone the workspace reads dates and days in. Everything is stored in UTC.
-  timeZone            String                @default("UTC") @map("time_zone")
+  timeZone              String                @default("UTC") @map("time_zone")
   /// Set when the workspace is to be deleted. Syncing and notifications stop at once.
-  deletionRequestedAt DateTime?             @map("deletion_requested_at") @db.Timestamptz(3)
+  deletionRequestedAt   DateTime?             @map("deletion_requested_at") @db.Timestamptz(3)
   /// When its data is deleted: the end of the hold.
-  deleteAfter         DateTime?             @map("delete_after") @db.Timestamptz(3)
-  deletionReason      TenantDeletionReason? @map("deletion_reason")
-  createdAt           DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt           DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deleteAfter           DateTime?             @map("delete_after") @db.Timestamptz(3)
+  deletionReason        TenantDeletionReason? @map("deletion_reason")
+  /// The last month (YYYY-MM) whose monthly summary was queued, so it is queued once.
+  lastReportDigestMonth String?               @map("last_report_digest_month")
+  createdAt             DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   users                  User[]
   integrations           Integration[]
@@ -411,6 +415,8 @@ model NotificationChannel {
   notifyOpened            Boolean                 @default(true) @map("notify_opened")
   notifyClosed            Boolean                 @default(true) @map("notify_closed")
   notifyIntegrationHealth Boolean                 @default(true) @map("notify_integration_health")
+  /// The monthly summary of every client's backups, early in each month.
+  notifyMonthlyReport     Boolean                 @default(true) @map("notify_monthly_report")
   /// What may be shown in the interface: a hint of the destination, never the destination itself.
   config                  Json                    @default("{}")
   /// Envelope-encrypted destination and signing secret. Never selected for the browser. Null for email.

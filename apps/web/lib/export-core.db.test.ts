@@ -32,6 +32,7 @@ const PREFS = {
   notifyOpened: true,
   notifyClosed: true,
   notifyIntegrationHealth: true,
+  notifyMonthlyReport: true,
 };
 
 /** A workspace with a little of everything. */

@@ -115,6 +115,16 @@ export interface Db {
   listDueNotificationBatches(input?: { limit?: number }): Promise<DueNotificationBatch[]>;
 
   /**
+   * Workspaces due the summary of last month: in the first `windowDays` days
+   * of a month in their own time zone, not yet sent it, with a channel that
+   * wants it. Ids and the month only.
+   */
+  listReportDigestTenants(input: {
+    now: Date;
+    windowDays?: number;
+  }): Promise<{ tenantId: string; month: string }[]>;
+
+  /**
    * Encrypted records, across all tenants, whose data key is not wrapped
    * under `excludeKeyId`: one page, after `after`, in a stable order. Ids and
    * key ids only; for the key rotation command.
@@ -246,6 +256,14 @@ export function createDb({ url, maxConnections = 10 }: CreateDbOptions): Db {
         SELECT batch_id, tenant_id FROM list_due_notification_batches(${Math.floor(limit)}::int)
       `;
       return rows.map((row) => ({ batchId: row.batch_id, tenantId: row.tenant_id }));
+    },
+
+    async listReportDigestTenants({ now, windowDays = 7 }) {
+      const rows = await prisma.$queryRaw<{ tenant_id: string; month: string }[]>`
+        SELECT tenant_id, month
+        FROM list_report_digest_tenants(${now}::timestamptz, ${Math.floor(windowDays)}::int)
+      `;
+      return rows.map((row) => ({ tenantId: row.tenant_id, month: row.month }));
     },
 
     async listEncryptedRecords({ excludeKeyId, after = null, limit = 200 }) {

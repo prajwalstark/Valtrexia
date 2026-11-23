@@ -26,6 +26,7 @@ const preferences = (formData: FormData) => ({
   notifyOpened: formData.get("notifyOpened"),
   notifyClosed: formData.get("notifyClosed"),
   notifyIntegrationHealth: formData.get("notifyIntegrationHealth"),
+  notifyMonthlyReport: formData.get("notifyMonthlyReport"),
 });
 
 export async function createWebhookChannelAction(

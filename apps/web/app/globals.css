@@ -40,6 +40,47 @@
   --status-unknown: oklch(0.64 0.025 264);
 }
 
+/*
+ * Printing, and saving as a PDF from the print dialog: dark ink on white
+ * paper. The status colours are darkened to keep 3:1 contrast on white;
+ * each still has its own glyph, so a black-and-white printout reads too.
+ */
+@media print {
+  :root {
+    color-scheme: light;
+
+    --background: oklch(1 0 0);
+    --surface: oklch(0.975 0.004 264);
+    --surface-raised: oklch(0.95 0.006 264);
+    --line: oklch(0.88 0.01 264);
+    --line-strong: oklch(0.64 0.015 264);
+
+    --foreground: oklch(0.22 0.03 264);
+    --muted-foreground: oklch(0.4 0.03 264);
+    --subtle-foreground: oklch(0.5 0.025 264);
+
+    --iris: oklch(0.48 0.16 286);
+    --iris-bright: oklch(0.42 0.16 286);
+    --iris-dim: oklch(0.8 0.06 286);
+
+    --status-success: oklch(0.55 0.13 158);
+    --status-warning: oklch(0.62 0.14 70);
+    --status-critical: oklch(0.53 0.2 25);
+    --status-running: oklch(0.52 0.13 245);
+    --status-unknown: oklch(0.55 0.02 264);
+  }
+
+  @page {
+    size: A4 landscape;
+    margin: 12mm;
+  }
+
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
+
 @theme inline {
   --font-sans: var(--font-archivo), ui-sans-serif, system-ui, sans-serif;
 

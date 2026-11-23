@@ -39,6 +39,7 @@ async function main(): Promise<void> {
     outboundPolicy: outboundPolicyFromEnv(process.env),
     emailSender: createEmailSenderFromEnv(process.env, logger),
     dattoBaseUrl: config.dattoBaseUrl,
+    appBaseUrl: config.appBaseUrl,
     retention: config.retention,
     operatorAlerts,
     operatorCheckSeconds: config.operatorCheckSeconds,

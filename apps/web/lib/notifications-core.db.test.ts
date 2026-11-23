@@ -79,6 +79,7 @@ const valid = {
   notifyOpened: "on",
   notifyClosed: null,
   notifyIntegrationHealth: "on",
+  notifyMonthlyReport: "on",
 };
 
 describe("createWebhookChannelFor", () => {
@@ -124,6 +125,7 @@ describe("createWebhookChannelFor", () => {
       notifyOpened: true,
       notifyClosed: false,
       notifyIntegrationHealth: true,
+      notifyMonthlyReport: true,
       config: { host: "hooks.example.com" },
     });
     // What anyone can list holds neither the path, its token, nor the secret.
@@ -320,6 +322,7 @@ describe("createEmailChannelFor", () => {
     notifyOpened: "on",
     notifyClosed: "on",
     notifyIntegrationHealth: "on",
+    notifyMonthlyReport: "on",
   };
   const emailDeps = (emailAvailable = true) => ({ db, ip: IP, emailAvailable });
 

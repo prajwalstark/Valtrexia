@@ -55,6 +55,7 @@ const PREFS: ChannelPreferencesInput = {
   notifyOpened: true,
   notifyClosed: true,
   notifyIntegrationHealth: true,
+  notifyMonthlyReport: true,
 };
 const SECRET_KEY = "datto-secret-key-must-not-leak-0000";
 const HOOK_TOKEN = "hook-path-token-must-not-leak";

@@ -1,11 +1,14 @@
 export {
   buildIncidentsPayload,
   buildIntegrationHealthPayload,
+  buildMonthlyReportPayload,
   buildTestPayload,
   changesForChannel,
   channelsForIntegrationHealth,
+  channelsForMonthlyReport,
   MAX_CHANGES_PER_MESSAGE,
   MAX_DELIVERY_ATTEMPTS,
+  MAX_REPORT_CLIENTS,
   nextAttemptAt,
   NOTIFICATION_PAYLOAD_VERSION,
   planIncidentMessages,
@@ -15,6 +18,8 @@ export {
   type IncidentPayloadEntry,
   type IncidentsPayload,
   type IntegrationHealthPayload,
+  type MonthlyReportClient,
+  type MonthlyReportPayload,
   type NotificationPayload,
   type TestPayload,
 } from "./notifications/plan";
@@ -91,5 +96,20 @@ export {
   type VendorId,
   type VendorInfo,
 } from "./vendors";
-export { escapeHtml, renderNotificationEmail, type RenderedEmail } from "./notifications/email";
+export {
+  escapeHtml,
+  MAX_EMAIL_REPORT_CLIENTS,
+  renderNotificationEmail,
+  type RenderedEmail,
+} from "./notifications/email";
 export { DELETION_HOLD_DAYS, deleteAfterFor, type DeletionReason } from "./offboarding";
+export {
+  buildClientMonthReport,
+  type AssetMonth,
+  type ClientMonthInput,
+  type ClientMonthReport,
+  type ReportAsset,
+  type ReportDay,
+  type ReportIncident,
+  type ReportResult,
+} from "./reports/client-month";

@@ -14,8 +14,8 @@ const INK = "var(--background)";
  *   warning  solid, with a dot   running  ring only
  *   unknown  solid, with a slash none     faint outline (no backup that day)
  */
-export function DayGlyph({ status }: { status: BackupStatus | null }) {
-  const common = { width: SIZE, height: SIZE, viewBox: "0 0 14 14", "aria-hidden": true } as const;
+export function DayGlyph({ status, size = SIZE }: { status: BackupStatus | null; size?: number }) {
+  const common = { width: size, height: size, viewBox: "0 0 14 14", "aria-hidden": true } as const;
 
   if (status === null) {
     return (

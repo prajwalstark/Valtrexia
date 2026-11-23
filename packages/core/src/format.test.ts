@@ -1,11 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
   dayKey,
+  daysOfMonth,
   formatDate,
   formatDateTime,
+  formatHours,
+  formatMonth,
+  formatShare,
+  isMonthKey,
   isTimeZone,
   lastDayKeys,
   listTimeZones,
+  monthKey,
+  shiftMonth,
+  startOfDay,
   timeAgo,
   timeZoneLabel,
 } from "./format";
@@ -194,5 +202,70 @@ describe("time zones a workspace can choose", () => {
     undefined,
   ])("refuses %j", (value) => {
     expect(isTimeZone(value)).toBe(false);
+  });
+});
+
+describe("formatShare", () => {
+  it("rounds down to a tenth of a percent, and drops a trailing .0", () => {
+    expect(formatShare(1)).toBe("100%");
+    expect(formatShare(0.99999)).toBe("99.9%");
+    expect(formatShare(26 / 31)).toBe("83.8%");
+    expect(formatShare(0.5)).toBe("50%");
+    expect(formatShare(0.07)).toBe("7%");
+    expect(formatShare(0)).toBe("0%");
+  });
+});
+
+describe("formatHours", () => {
+  it("speaks in hours up to two days, then in days", () => {
+    expect(formatHours(0.4)).toBe("under an hour");
+    expect(formatHours(1)).toBe("1 hour");
+    expect(formatHours(5.6)).toBe("6 hours");
+    expect(formatHours(47.4)).toBe("47 hours");
+    expect(formatHours(60)).toBe("2.5 days");
+    expect(formatHours(72)).toBe("3 days");
+  });
+});
+
+describe("months", () => {
+  it("validates, shifts, names and finds months", () => {
+    expect(isMonthKey("2026-10")).toBe(true);
+    expect(isMonthKey("2026-13")).toBe(false);
+    expect(isMonthKey("2026-1")).toBe(false);
+    expect(isMonthKey("1999-12")).toBe(false);
+    expect(shiftMonth("2026-01", -1)).toBe("2025-12");
+    expect(shiftMonth("2026-11", 14)).toBe("2028-01");
+    expect(formatMonth("2026-10")).toBe("October 2026");
+    expect(daysOfMonth("2028-02")).toHaveLength(29);
+    expect(daysOfMonth("2026-04").at(-1)).toBe("2026-04-30");
+    // 23:30 UTC on 31 October: already November in Berlin (UTC+1), still October in New York.
+    expect(monthKey(new Date("2026-10-31T23:30:00Z"), "Europe/Berlin")).toBe("2026-11");
+    expect(monthKey(new Date("2026-10-31T23:30:00Z"), "America/New_York")).toBe("2026-10");
+  });
+});
+
+describe("startOfDay", () => {
+  it("finds local midnight, including on days the clocks change", () => {
+    expect(startOfDay("2026-03-30", "Europe/London").toISOString()).toBe(
+      "2026-03-29T23:00:00.000Z",
+    );
+    expect(startOfDay("2026-10-25", "Europe/London").toISOString()).toBe(
+      "2026-10-24T23:00:00.000Z",
+    );
+    expect(startOfDay("2026-10-26", "Europe/London").toISOString()).toBe(
+      "2026-10-26T00:00:00.000Z",
+    );
+    expect(startOfDay("2026-11-01", "America/New_York").toISOString()).toBe(
+      "2026-11-01T04:00:00.000Z",
+    );
+    expect(startOfDay("2026-10-04", "Australia/Sydney").toISOString()).toBe(
+      "2026-10-03T14:00:00.000Z",
+    );
+    expect(startOfDay("2026-11-15", "Asia/Kolkata").toISOString()).toBe("2026-11-14T18:30:00.000Z");
+    expect(startOfDay("2026-11-15", "UTC").toISOString()).toBe("2026-11-15T00:00:00.000Z");
+    // Chile moves its clocks at midnight: 6 September 2026 begins at 01:00, UTC-3.
+    expect(startOfDay("2026-09-06", "America/Santiago").toISOString()).toBe(
+      "2026-09-06T04:00:00.000Z",
+    );
   });
 });

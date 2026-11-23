@@ -1,8 +1,9 @@
-import { ChevronDown, ChevronLeft, ClockAlert } from "lucide-react";
+import { ChevronDown, ChevronLeft, ClockAlert, FileText } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { PageHeader } from "@/components/shell/page-header";
 import { HealthBadge, INCIDENT_META, STATUS_META, StatusBadge } from "@/components/status/status";
+import { Button } from "@/components/ui/button";
 import {
   HISTORY_DAYS,
   type ClientAsset,
@@ -44,7 +45,17 @@ export function ClientDetailView({
         Dashboard
       </Link>
       <div className="mt-4">
-        <PageHeader title={client.name} />
+        <PageHeader
+          title={client.name}
+          action={
+            <Button asChild variant="outline" size="sm">
+              <Link href={`/clients/${client.id}/report`}>
+                <FileText aria-hidden="true" />
+                Monthly report
+              </Link>
+            </Button>
+          }
+        />
         <p className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1">
           <HealthBadge health={client.summary.health} />
           <span className="text-muted-foreground">{describeClient(client.summary)}</span>

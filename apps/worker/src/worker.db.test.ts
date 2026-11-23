@@ -127,6 +127,9 @@ async function start(overrides: Partial<WorkerOptions> = {}): Promise<RunningWor
     // One tick runs at startup. After that, tests trigger ticks themselves
     // unless they shorten this.
     schedulerTickSeconds: 3600,
+    // Real time, on a shared database: in a month's first week it would
+    // queue summaries for every other test's workspaces.
+    monthlyReports: false,
     prefix,
     ...overrides,
   });

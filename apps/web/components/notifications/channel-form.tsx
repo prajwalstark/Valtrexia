@@ -93,6 +93,7 @@ function ChannelForm({
   const [opened, setOpened] = useState(true);
   const [closed, setClosed] = useState(true);
   const [health, setHealth] = useState(true);
+  const [monthly, setMonthly] = useState(true);
   const errors = state.status === "error" ? state.fieldErrors : undefined;
   const field = kind === "webhook" ? "url" : "recipients";
 
@@ -226,6 +227,12 @@ function ChannelForm({
             label="When an integration fails or recovers"
             checked={health}
             onChange={setHealth}
+          />
+          <Check
+            name="notifyMonthlyReport"
+            label="A summary of every client, each month"
+            checked={monthly}
+            onChange={setMonthly}
           />
         </div>
       </fieldset>

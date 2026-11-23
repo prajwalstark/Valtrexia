@@ -60,6 +60,7 @@ export {
   listRecentBatches,
   queueIncidentNotifications,
   queueIntegrationHealthNotifications,
+  queueMonthlyReportNotifications,
   queueTestNotification,
   setNotificationChannelEnabled,
   type BatchOutcome,
@@ -69,6 +70,7 @@ export {
   type RecentBatch,
   type WebhookDestination,
 } from "./repositories/notifications";
+export { loadClientMonthReport, type LoadedClientReport } from "./repositories/reports";
 export {
   ActorType,
   BackupStatus,

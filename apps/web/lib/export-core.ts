@@ -164,6 +164,7 @@ const SECTIONS: {
           notifyOpened: true,
           notifyClosed: true,
           notifyIntegrationHealth: true,
+          notifyMonthlyReport: true,
           config: true,
           createdAt: true,
         },

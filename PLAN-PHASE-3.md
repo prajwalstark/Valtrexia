@@ -125,11 +125,12 @@ The PSA's API is new ground, with the same rule as the vendors: built from its p
 
 All additive, each in the step that needs it.
 
-| Step | Change                                                                                                                                              |
-| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 3    | `operator_alerts` (condition, opened, cleared): outside the tenant model, no tenant data, not readable by the app role beyond what the worker needs |
-| 7    | Notification channel type `psa`; `psa_company_mappings` and `psa_tickets` as tenant tables, with policies                                           |
-| 10   | Indexes, only where a measurement shows they are needed                                                                                             |
+| Step | Change                                                                                                                                                |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 3    | `operator_alerts` (condition, opened, cleared): outside the tenant model, no tenant data, not readable by the app role beyond what the worker needs   |
+| 6    | `tenants.last_report_digest_month`, `notification_channels.notify_monthly_report`, batch kind `report`; definer function `list_report_digest_tenants` |
+| 7    | Notification channel type `psa`; `psa_company_mappings` and `psa_tickets` as tenant tables, with policies                                             |
+| 10   | Indexes, only where a measurement shows they are needed                                                                                               |
 
 Every new tenant table is added to the tenant isolation tests in the same step, and every new definer function to the catalog test.
 
@@ -181,11 +182,23 @@ Each step's report will say which of its claims are tested and which are assumed
 
 ## 10. Progress
 
-| #   | Step                 | State | Notes                                                                                                               |
-| --- | -------------------- | ----- | ------------------------------------------------------------------------------------------------------------------- |
-| 1   | Deployment packaging | Done  | Images built and run as production would, locally and in CI; the AWS guide is written but not yet followed for real |
+| #   | Step                 | State | Notes                                                                                                                              |
+| --- | -------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Deployment packaging | Done  | Images built and run as production would, locally and in CI; the AWS guide is written but not yet followed for real                |
+| 2   | Email provider       | Done  | Resend over its HTTP API, tested against a stand-in built from its reference; no real email sent yet                               |
+| 3   | Operator monitoring  | Done  | Fleet check, operator alerts by email and webhook, `/api/status`; a stopped worker reported in CI                                  |
+| 4   | Backups and restore  | Done  | `pnpm db:verify`, tested on a real dump and restore; the drill itself is for the first AWS deployment                              |
+| 5   | Data export          | Done  | Owners download their workspace as gzipped JSON from Settings                                                                      |
+| 6   | Client reports       | Done  | Monthly report page with print layout, checked in a browser on screen, in print and as a PDF; monthly summary by email and webhook |
 
 Changes made during the build:
+
+- **Reports judge each day at its end, by the dashboard's rules**, instead of the measures section 4.5 planned. "The share of days with a completed backup" would have marked a weekly backup down six days in seven, and "asset-days inside the SLA" is the same idea for one measure only. Now both figures ask, at the end of each day: was the last completed backup within the asset's interval plus grace (on schedule), and within its SLA? A weekly asset is scored by its own schedule, and the report agrees with what the dashboard showed.
+- **A missed day has its own glyph in the report**, an outlined cross, so it reads apart from a failed backup in black and white too.
+- **Asset settings have no history**, so a report applies an asset's current schedule, SLA and exclusion to the whole month. Keeping a history is possible later if MSPs need it.
+- **The summary also goes to webhooks**, as `report.monthly`, under a new per-channel preference that is on by default, including for existing channels. Receivers that follow Standard Webhooks ignore types they do not know.
+- **The summary is sent in the first seven days of a month only.** Without a limit, a workspace whose worker was down, or a new deployment mid-month, would get last month's summary weeks late.
+- **Links in the summary email need `APP_BASE_URL`**, a new optional worker setting; without it the email has none.
 
 - **The export also includes members and vendor client mappings**, which section 4.4 did not list. Without members the audit log's actors and an asset's muter are bare ids; without mappings a client cannot be traced to its vendor's customer. Members are the workspace's own people.
 - **An export is a download from the Settings page**, not a background job with a link sent later. It is written and compressed as it is read, so a large workspace does not need a job; if one ever takes too long for a browser, a job can be added.

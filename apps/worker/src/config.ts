@@ -27,6 +27,19 @@ const schema = z.object({
   /** Audit entries are deleted after this many days (24 months). */
   RETENTION_AUDIT_DAYS: number(90, 3650, 730),
   DATTO_API_BASE_URL: z.preprocess(blankToUndefined, z.url().optional()),
+  /** Where the web app is served, for links in emails. Without it, emails have none. */
+  APP_BASE_URL: z.preprocess(
+    blankToUndefined,
+    z
+      .url({ protocol: /^https?$/, error: "APP_BASE_URL must be an http or https address" })
+      .refine((value) => {
+        // Zod runs this even when the URL check above failed.
+        if (!URL.canParse(value)) return true;
+        const url = new URL(value);
+        return url.search === "" && url.hash === "" && url.username === "" && url.password === "";
+      }, "APP_BASE_URL must be just the address the app is served at")
+      .optional(),
+  ),
   LOG_LEVEL: z.preprocess(
     blankToUndefined,
     z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
@@ -41,6 +54,7 @@ export interface WorkerConfig {
   schedulerTickSeconds: number;
   notificationTickSeconds: number;
   dattoBaseUrl: string | undefined;
+  appBaseUrl: string | undefined;
   logLevel: string;
   retention: RetentionPolicy;
   operatorCheckSeconds: number;
@@ -75,6 +89,7 @@ export function parseConfig(env: Record<string, string | undefined>): WorkerConf
     schedulerTickSeconds: value.SCHEDULER_TICK_SECONDS,
     notificationTickSeconds: value.NOTIFICATION_TICK_SECONDS,
     dattoBaseUrl: value.DATTO_API_BASE_URL,
+    appBaseUrl: value.APP_BASE_URL?.replace(/\/+$/, ""),
     logLevel: value.LOG_LEVEL,
     operatorCheckSeconds: value.OPERATOR_CHECK_SECONDS,
     retention: {
